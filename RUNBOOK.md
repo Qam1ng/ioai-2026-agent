@@ -30,7 +30,25 @@ Environment expectations: `nvidia-smi` shows a GPU; `python -c "import torch;pri
 
 ---
 
-## 1. Per-task workflow
+## 0.5 One command (standalone — no Claude Code)
+
+The agent is plain Python that calls the Anthropic API directly; Claude Code is
+not required. Run the whole autonomous pipeline (features → agent loop → build
+notebook from the agent's best → push + submit → score) with one command:
+
+```bash
+export PATH="/home/qing/miniconda3/bin:$PATH"
+python run.py --task task1_audio \
+    --slug ioai-2026-ai-models-track-practice-task-1 --iters 6 --submit
+```
+
+Drop `--submit` for a dry run (stops after building the notebook + local best).
+Just the offline decision loop, no Kaggle:
+`python src/agent_loop.py --task task1_audio --iters 6`.
+
+---
+
+## 1. Per-task workflow (step by step)
 
 Everything lives under `tasks/<task>/`. Example: `task1_audio`.
 

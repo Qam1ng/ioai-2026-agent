@@ -1,21 +1,12 @@
-"""IOAI 2026 Task-1 submission notebook (Kaggle Code Competition).
+"""Kaggle submission notebook TEMPLATE for Task 1.
 
-Runs end-to-end on Kaggle: loads the provided AST checkpoint, extracts frozen
-768-d LayerNormed features, then reproduces the agent's best offline strategy —
-augment features with the frozen 16-class head logits and fit a class-balanced
-LogisticRegression over all 29 classes — and writes /kaggle/working/submission.csv.
-
-Starts from the provided checkpoint, reuses its encoder, adds new-class capacity
-via the linear head; no training from scratch, no other pretrained audio models.
+run.py injects the agent's best `fit_predict` at the marker below, then this
+notebook (on Kaggle GPU) extracts frozen AST features and calls it to produce
+/kaggle/working/submission.csv. Generic: whatever strategy the agent picked,
+this template runs it — no hand-editing per iteration.
 """
-import os
-import csv
-import numpy as np
-import torch
-import librosa
+import os, csv, numpy as np, torch, librosa
 from transformers import ASTFeatureExtractor, ASTForAudioClassification
-from sklearn.preprocessing import StandardScaler
-from sklearn.linear_model import LogisticRegression
 
 OUT = "/kaggle/working/submission.csv"
 SR, BATCH = 16000, 16
@@ -23,24 +14,28 @@ DEV = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 def find_input():
-    """Locate the dir holding submission.csv. Code competitions mount data at
-    /kaggle/input/competitions/<slug>/, so search recursively rather than assume."""
-    for root, _dirs, files in os.walk("/kaggle/input"):
+    for root, _d, files in os.walk("/kaggle/input"):
         if "submission.csv" in files and "train.csv" in files:
             return root
     raise RuntimeError("input dir not found under /kaggle/input")
 
 
-def find_model(INPUT):
-    for root, _dirs, files in os.walk(INPUT):
+def find_model(inp):
+    for root, _d, files in os.walk(inp):
         if "config.json" in files and any(f.endswith(".safetensors") for f in files):
             return root
-    raise RuntimeError("model dir (config.json + *.safetensors) not found under " + INPUT)
+    raise RuntimeError("model dir not found under " + inp)
 
 
-INPUT = find_input()
-MODEL = find_model(INPUT)
+INPUT = find_input(); MODEL = find_model(INPUT)
 print("INPUT =", INPUT, "| MODEL =", MODEL, "| device =", DEV)
+
+
+# ============================= AGENT_FIT_PREDICT =============================
+# (run.py replaces this line with the agent's best fit_predict definition)
+def fit_predict(Xtr, ytr, Xva, old_W, old_b):
+    raise RuntimeError("no agent code injected")
+# ===========================================================================
 
 
 def rows(name):
@@ -72,21 +67,11 @@ def main():
             out[i:i + len(waves)] = feat.cpu().numpy()
         return out.astype(np.float64)
 
-    Xl = feats(labeled)
-    Xe = feats(sub)
-
-    def augment(X):
-        return np.hstack([X, X @ old_W.T + old_b])   # features + frozen old logits
-
-    scaler = StandardScaler().fit(augment(Xl))
-    clf = LogisticRegression(C=1.0, class_weight="balanced", max_iter=5000,
-                             solver="lbfgs", random_state=0)
-    clf.fit(scaler.transform(augment(Xl)), y)
-    preds = clf.predict(scaler.transform(augment(Xe))).astype(int)
+    Xl, Xe = feats(labeled), feats(sub)
+    preds = np.asarray(fit_predict(Xl, y, Xe, old_W, old_b)).astype(int).ravel()
 
     with open(OUT, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["path", "target"])
+        w = csv.writer(f); w.writerow(["path", "target"])
         for r, p in zip(sub, preds):
             w.writerow([r["path"], int(p)])
     print("wrote", OUT, "rows:", len(sub), "distinct preds:", len(set(preds.tolist())))
