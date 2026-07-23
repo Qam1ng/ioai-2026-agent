@@ -56,13 +56,14 @@ def extract() -> None:
     fe = ASTFeatureExtractor.from_pretrained(MODEL_DIR)
     model = ASTForAudioClassification.from_pretrained(MODEL_DIR).to(device).eval()
 
-    # Save the frozen old head (16 x 768) so the solver can freeze old logits.
-    sd = model.state_dict()
-    w_key = next(k for k in sd if k.endswith("classifier.weight"))
-    b_key = next(k for k in sd if k.endswith("classifier.bias"))
-    np.save(CACHE / "old_head_W.npy", sd[w_key].cpu().numpy())   # [16, 768]
-    np.save(CACHE / "old_head_b.npy", sd[b_key].cpu().numpy())   # [16]
-    print(f"old head: {w_key} {tuple(sd[w_key].shape)}")
+    # The head is ASTMLPHead = LayerNorm -> Linear(768->16). We cache the
+    # LAYERNORMED feature (the dense layer's input) so old logits = feat @ W_old
+    # reproduce the checkpoint exactly, and new rows share the same normalized
+    # feature space. Save the frozen dense weights (W_old [16,768], b_old [16]).
+    head = model.classifier            # ASTMLPHead
+    np.save(CACHE / "old_head_W.npy", head.dense.weight.detach().cpu().numpy())
+    np.save(CACHE / "old_head_b.npy", head.dense.bias.detach().cpu().numpy())
+    print(f"old head dense: {tuple(head.dense.weight.shape)}")
 
     paths = all_paths()
     print(f"extracting embeddings for {len(paths)} clips...")
@@ -80,8 +81,9 @@ def extract() -> None:
             out = model.audio_spectrogram_transformer(
                 inputs["input_values"].to(device)
             )
-            emb = out.pooler_output  # [B, 768]
-        embs[i : i + len(batch_paths)] = emb.cpu().numpy()
+            # LayerNormed feature = the dense head's input (see head note above)
+            feat = model.classifier.layernorm(out.pooler_output)  # [B, 768]
+        embs[i : i + len(batch_paths)] = feat.cpu().numpy()
         if (i // BATCH) % 10 == 0:
             done = i + len(batch_paths)
             print(f"  {done}/{len(paths)}  ({done/(time.time()-t0):.1f} clips/s)")
