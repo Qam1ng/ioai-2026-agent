@@ -1,0 +1,11 @@
+# Core agent brain
+anthropic>=0.40
+
+# Kaggle submission (At Home practice tasks run on Kaggle)
+kaggle
+
+# ML stack for solving IOAI tasks (installed as needed per task)
+numpy
+pandas
+scikit-learn
+# torch / timm / etc. added per-task
