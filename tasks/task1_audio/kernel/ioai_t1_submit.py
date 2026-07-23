@@ -17,10 +17,32 @@ from transformers import ASTFeatureExtractor, ASTForAudioClassification
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LogisticRegression
 
-INPUT = "/kaggle/input/ioai-2026-ai-models-track-practice-task-1"
 OUT = "/kaggle/working/submission.csv"
 SR, BATCH = 16000, 16
 DEV = "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def find_input():
+    """Kaggle mounts competition data under /kaggle/input/<something>/.
+    Locate the dir that actually holds submission.csv rather than hardcoding."""
+    base = "/kaggle/input"
+    for d in sorted(os.listdir(base)):
+        p = os.path.join(base, d)
+        if os.path.isfile(os.path.join(p, "submission.csv")):
+            return p
+    raise RuntimeError("input dir not found; /kaggle/input = " + str(os.listdir(base)))
+
+
+def find_model(INPUT):
+    for root, _dirs, files in os.walk(INPUT):
+        if "config.json" in files and any(f.endswith(".safetensors") for f in files):
+            return root
+    raise RuntimeError("model dir (config.json + *.safetensors) not found under " + INPUT)
+
+
+INPUT = find_input()
+MODEL = find_model(INPUT)
+print("INPUT =", INPUT, "| MODEL =", MODEL, "| device =", DEV)
 
 
 def rows(name):
@@ -29,9 +51,8 @@ def rows(name):
 
 
 def main():
-    fe = ASTFeatureExtractor.from_pretrained(os.path.join(INPUT, "model"))
-    model = ASTForAudioClassification.from_pretrained(
-        os.path.join(INPUT, "model")).to(DEV).eval()
+    fe = ASTFeatureExtractor.from_pretrained(MODEL)
+    model = ASTForAudioClassification.from_pretrained(MODEL).to(DEV).eval()
     old_W = model.classifier.dense.weight.detach().cpu().numpy().astype(np.float64)
     old_b = model.classifier.dense.bias.detach().cpu().numpy().astype(np.float64)
 
