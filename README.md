@@ -23,6 +23,11 @@ first practice task (**Audio Classifier**, a class-incremental learning problem)
   experiments.**
 - ✅ **Standalone**: `python run.py …` runs the whole thing without Claude Code.
 - ✅ First real Kaggle submission scored (code-competition notebook path verified).
+- ✅ **Outer agent v0** (`agent/`): 8-phase autonomous orchestrator (read task →
+  plan → build its own scaffolding → floor submit → experiment → report) with a
+  **pluggable LLM backend**, sandboxed tools, persistent memory/skills, budgets
+  and full tracing. `python -m agent.main --slug <comp> --brief task.md` is the
+  human's only action. Autonomous end-to-end validation on Task 1 in progress.
 
 **Results — Practice Task 1**
 
@@ -46,14 +51,22 @@ first practice task (**Audio Classifier**, a class-incremental learning problem)
 
 ---
 
+## Architecture
+
+![Architecture](docs/architecture.svg)
+
+Full design rationale: [DESIGN.md](DESIGN.md).
+
 ## How it works
 
 ```
-                OUTER agent  (NOT built yet)
+                OUTER agent  (v0 built ✅ — agent/)
    read a fresh task → write data-loading / features / metric / notebook
-                              │
+   8 phases: INGEST→ANALYZE→PLAN→SCAFFOLD→BASELINE→EXPERIMENT→FINALIZE→REPORT
+   pluggable LLM backend · tools · memory/skills · budgets · trace
+                              │ (subsumes)
                               ▼
-   INNER loop  (built ✅)  — src/agent_loop.py
+   INNER loop  (built ✅)  — src/agent_loop.py (legacy standalone form)
    ┌─ each iteration ─────────────────────────────────────┐
    │ agent sees: task + metric + its own past experiments  │
    │        ↓ decides + writes fit_predict code            │
