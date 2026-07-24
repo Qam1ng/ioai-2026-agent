@@ -55,7 +55,7 @@ first practice task (**Audio Classifier**, a class-incremental learning problem)
 
 ![Architecture](docs/architecture.svg)
 
-Full design rationale: [DESIGN.md](DESIGN.md).
+Full design rationale: [DESIGN.md](DESIGN.md). Team onboarding: [docs/READING.md](docs/READING.md).
 
 ## How it works
 
