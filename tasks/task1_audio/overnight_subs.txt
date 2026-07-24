@@ -1,3 +1,0 @@
-     ref  fileName        date                        description                                                                        status                    publicScore  privateScore  
---------  --------------  --------------------------  ---------------------------------------------------------------------------------  ------------------------  -----------  ------------  
-54923532  submission.csv  2026-07-23 08:41:13.137000  agent-loop best: aug feat + frozen-head logits + balanced LogReg (holdout 0.9156)  SubmissionStatus.PENDING                             
