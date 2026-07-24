@@ -30,10 +30,15 @@ def main():
     ap.add_argument("--max-cost-usd", type=float, default=20.0)
     ap.add_argument("--phase", default=None, help="run only this phase")
     ap.add_argument("--start-phase", default=None, help="start from this phase")
+    ap.add_argument("--brief", default=None,
+                    help="path to the official task statement; copied to "
+                         "workspace/BRIEF.md as launch input (part of Phase 0)")
     args = ap.parse_args()
 
     ws = ROOT / "workspace" / args.slug
     ws.mkdir(parents=True, exist_ok=True)
+    if args.brief:
+        (ws / "BRIEF.md").write_text(Path(args.brief).read_text())
 
     provider = get_provider(args.backend, args.model)
     budget = Budget(deadline_s=args.deadline_min * 60,

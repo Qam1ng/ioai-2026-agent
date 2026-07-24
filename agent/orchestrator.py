@@ -170,6 +170,7 @@ Mission: maximize the official competition metric within budget, then document h
 
 Ground rules:
 - Competition slug: {slug}. Workspace is your cwd for all tools; data in input/.
+- If BRIEF.md exists in the workspace, it is the official task statement supplied at launch — treat it as authoritative (esp. the metric) and read it FIRST.
 - The scoring environment (Kaggle notebook) is likely OFFLINE; anything the kernel needs must come from competition data or be self-contained.
 - A valid submission must exist as early as possible and at all times thereafter (floor first, improve later).
 - Trust measurements over hunches: k-fold means with variance, never single tiny holdouts; small classes produce phantom 0.0s.
