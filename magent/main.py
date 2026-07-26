@@ -93,6 +93,7 @@ async def run(args) -> None:
     trace.log("launch", slug=args.slug, model=MODEL, repos=args.repos)
 
     async with ClaudeSDKClient(options=options) as client:
+        last_turns = 99
         for rnd in range(1, args.rounds + 1):
             if budget.remaining() <= 0 or budget.cost_usd >= budget.max_cost_usd:
                 prompt = ("BUDGET EXHAUSTED. Stop all new work NOW. If any valid "
@@ -125,6 +126,7 @@ async def run(args) -> None:
                     u = msg.usage or {}
                     budget.tokens_in += u.get("input_tokens", 0)
                     budget.tokens_out += u.get("output_tokens", 0)
+                    last_turns = msg.num_turns
                     trace.log("result", round=rnd, cost=cost,
                               turns=msg.num_turns, err=msg.is_error)
                     print(f"  [round {rnd} done] turns={msg.num_turns} "
@@ -133,6 +135,12 @@ async def run(args) -> None:
             done = (ws / "REPORT.md").exists() and budget.submissions > 0
             if done or final_round:
                 break
+            # Pacing: a short round means the manager is waiting on something.
+            # Give real work time to happen instead of burning continue-rounds.
+            if last_turns <= 3:
+                wait_s = min(120, max(30, budget.remaining() * 0.02))
+                print(f"  [pacing] short round -> sleeping {wait_s:.0f}s")
+                await asyncio.sleep(wait_s)
 
     print("\n===== RUN COMPLETE =====")
     print(budget_line(budget))
@@ -150,8 +158,9 @@ def main():
     ap.add_argument("--deadline-min", type=float, default=120)
     ap.add_argument("--max-submissions", type=int, default=3)
     ap.add_argument("--max-cost-usd", type=float, default=30.0)
-    ap.add_argument("--rounds", type=int, default=8,
-                    help="max start/continue rounds")
+    ap.add_argument("--rounds", type=int, default=60,
+                    help="safety cap on start/continue rounds (wall-clock is "
+                         "the real stop; short waiting rounds sleep, see pacing)")
     ap.add_argument("--max-turns", type=int, default=250,
                     help="max agent turns per round")
     args = ap.parse_args()

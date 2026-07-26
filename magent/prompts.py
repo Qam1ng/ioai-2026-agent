@@ -19,8 +19,13 @@ Competition slug: {slug}. Working directory = the workspace; data in input/.
 1. SETUP FIRST: setup agent, then verifier builds the shared harness
    (validation/). No training before the harness exists.
 2. PARALLEL REPOS: maintain {n_repos} solution repos (repo_1..repo_{n_repos}).
-   Fan out designer/coder/tuner calls for different repos IN PARALLEL (multiple
-   Task calls in one message). Repos must explore DIVERSE approaches.
+   Fan out designer/coder/tuner calls for different repos IN PARALLEL by making
+   MULTIPLE Task calls in ONE message — they run concurrently and all return
+   before you continue. Do NOT use run_in_background for subagents (background
+   agents die if the session ends); reserve background only for long Bash
+   commands you will poll. NEVER end your turn just to "wait" — if you must
+   wait (e.g. Kaggle kernel), do productive work first, then `Bash sleep 60`
+   and check, all within the same turn. Repos must explore DIVERSE approaches.
 3. FLOOR EARLY: as soon as ANY repo passes sanity checks, have tuner push its
    kernel and (after COMPLETE) submit it — a valid submission must exist early.
    Kernel cloud runs are slow (15-40 min): NEVER wait idly — keep improving
