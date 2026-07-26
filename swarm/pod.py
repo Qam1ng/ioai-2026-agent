@@ -198,12 +198,12 @@ class TaskPod:
                 for c in self.bb.get_candidates()
                 if c.status == "ready"
                 and c.kernel_dir
-                and (self.bb.ws / c.kernel_dir / "kernel.py").exists()
+                and self._candidate_kernel(c) is not None
             ]
             # floor family first, then scored ones, then whatever is ready
             ready.sort(key=lambda c: (c.family != "floor", c.local_score is None))
             for cand in ready:
-                code = self.bb.ws / cand.kernel_dir / "kernel.py"
+                code = self._candidate_kernel(cand)
                 ok, why = self.broker.may_submit("floor")
                 if not ok:
                     self.bb.event("gate_error", gate="floor", error=why)
@@ -716,11 +716,34 @@ class TaskPod:
             with self._verify_lock:
                 self._verify_inflight.discard(cid)
 
+    def _candidate_kernel(self, cand: CandidateState) -> Path | None:
+        """Locate a candidate's kernel, tolerating one level of creative filing.
+
+        A coder once wrote a perfectly good kernel to ``<sandbox>/kernel/
+        kernel.py`` and every consumer that hardcoded ``<sandbox>/kernel.py``
+        silently skipped the candidate. The artifact contract still says top
+        level, but the pod should not throw away a working kernel over a
+        directory of difference: search shallow-first, top level wins ties.
+        """
+        root = self.bb.ws / cand.kernel_dir
+        direct = root / "kernel.py"
+        if direct.exists():
+            return direct
+        if not root.exists():
+            return None
+        hits = sorted(root.glob("*/kernel.py")) + sorted(root.glob("*/*/kernel.py"))
+        return hits[0] if hits else None
+
     def _candidate_accelerator(self, cand: CandidateState) -> str:
         """Read the accelerator the coder declared in its kernel metadata."""
         import json as _json
 
-        meta = self.bb.ws / cand.kernel_dir / "kernel-metadata.json"
+        kernel = self._candidate_kernel(cand)
+        meta = (
+            kernel.parent / "kernel-metadata.json"
+            if kernel is not None
+            else self.bb.ws / cand.kernel_dir / "kernel-metadata.json"
+        )
         try:
             d = _json.loads(meta.read_text())
         except (OSError, ValueError):
@@ -737,8 +760,12 @@ class TaskPod:
         reached the leaderboard because no code path ever asked the broker for
         the milestone lane.
         """
-        kernel = self.bb.ws / cand.kernel_dir / "kernel.py"
-        if not kernel.exists():
+        kernel = self._candidate_kernel(cand)
+        if kernel is None:
+            self.bb.event(
+                "milestone_gate", candidate_id=cand.candidate_id, allowed=False,
+                why="no kernel.py found in the candidate directory",
+            )
             return
         accel = self._candidate_accelerator(cand)
         ok, why = self.broker.may_submit(
@@ -871,8 +898,8 @@ class TaskPod:
             if best is None:
                 self.bb.event("aggregate_skipped", why="no scored candidate")
                 return
-            kernel = self.bb.ws / best.kernel_dir / "kernel.py"
-            if not kernel.exists():
+            kernel = self._candidate_kernel(best)
+            if kernel is None:
                 self.bb.event("aggregate_skipped", why=f"{best.candidate_id} has no kernel")
                 return
             ok, why = self.broker.may_submit("final")
