@@ -242,10 +242,14 @@ class TaskPod:
             "MUST/MUST-NOT constraint quoted verbatim from the statement, the variable "
             "that cross-validation folds must be grouped by, and the main risks."
         )
-        card = role.parse(res) if hasattr(role, "parse") else None
-        if card is None:
+        # NB the exact method name matters: an earlier version probed for a
+        # generic `parse` that no role implements, so every profiler report was
+        # silently discarded and two rehearsals ran on an empty task card.
+        try:
+            card = role.parse_card(res.report, slug=self.cfg.slug)
+        except (ValueError, AttributeError) as exc:
             card = TaskCard(slug=self.cfg.slug, routing_confidence=0.0)
-            self._errors.append("profiler produced no task card; running with an empty one")
+            self._errors.append(f"profiler card unusable ({exc}); running with an empty one")
         self.bb.put_task_card(card)
         return card
 
@@ -266,7 +270,9 @@ class TaskPod:
             "validation strategy, expected runtime and the accelerator it needs. Write no code.",
             context={"task_card": (self.bb.get_task_card() or TaskCard(self.cfg.slug)).to_dict()},
         )
-        new = role.parse(res) if hasattr(role, "parse") else []
+        new = role.parse_plans(res.report) if res.report else []
+        if not new and res.report:
+            self._errors.append("designer report parsed to zero plans")
         for p in new:
             self.bb.add_plan(p)
         return self.bb.get_plans()
@@ -716,11 +722,7 @@ class TaskPod:
                     "Choose the single next action. Emit exactly one action object.",
                     context=snapshot,
                 )
-                action = (
-                    manager.parse(res)
-                    if hasattr(manager, "parse")
-                    else ManagerAction.from_dict(res.report or {})
-                )
+                action = manager.parse_action(res.report or {})
                 self.bb.event(
                     "manager_action",
                     action=action.action,
