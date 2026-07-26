@@ -111,7 +111,10 @@ def get_provider(
     if backend in ("openai", "gpt", "gemini", "compat"):
         from .openai_p import OpenAIProvider
         return _construct(OpenAIProvider, kwargs)
-    raise ValueError(f"unknown backend: {backend!r} (use claude|openai)")
+    if backend == "crawl":
+        from .crawl_p import CrawlProvider
+        return _construct(CrawlProvider, kwargs)
+    raise ValueError(f"unknown backend: {backend!r} (use claude|openai|crawl)")
 
 
 # Tool schema is declared provider-neutrally as:

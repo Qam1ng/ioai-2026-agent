@@ -139,6 +139,7 @@ class Role:
         )
         self.sandbox = Path(sandbox) if sandbox else bb.ws
         self.session_id = ""
+        self._pending_warning = ""
 
     # ------------------------------------------------------------ plumbing
     @staticmethod
@@ -262,6 +263,25 @@ class Role:
                 )
                 continue
 
+            # Tell the role how much rope it has left. Without this a role
+            # explores until the cap cuts it off mid-thought and returns no
+            # report at all -- measured on the radar task, where the Profiler
+            # spent all 22 steps walking a 1500-file tree and produced an empty
+            # task card. A truncated-but-emitted report beats a perfect one
+            # that never gets written.
+            left = self.max_steps - (step_i + 1)
+            if left == 1:
+                self._pending_warning = (
+                    "STEP BUDGET: this is your LAST step. Stop investigating and emit your "
+                    "report as a single fenced ```json block now, using what you already know. "
+                    "Mark anything still unknown explicitly rather than omitting it."
+                )
+            elif left <= max(2, self.max_steps // 4):
+                self._pending_warning = (
+                    f"STEP BUDGET: {left} steps left. Start converging -- gather only what you "
+                    "still need, then emit the fenced ```json report."
+                )
+
             results = []
             for call in step.tool_calls:
                 out = self._call_tool(call.name, call.input)
@@ -270,6 +290,9 @@ class Role:
                     ToolResult(call.id, out, is_error=str(out).startswith("[tool error]"))
                 )
             self.provider.append_tool_results(history, results)
+            if self._pending_warning:
+                self.provider.append_user(history, self._pending_warning)
+                self._pending_warning = ""
 
         report = extract_json(last_text)
         return RoleResult(

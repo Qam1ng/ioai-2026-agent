@@ -29,6 +29,28 @@ class ClaudeCodeUnavailable(RuntimeError):
     """Raised when the `claude` CLI is not installed or not on PATH."""
 
 
+_ROOT = Path(__file__).resolve().parents[2]
+
+
+def load_dotenv() -> None:
+    """Make ``.env`` visible to the spawned CLI.
+
+    The API-path providers read ``.env`` themselves, but a subprocess only sees
+    the real environment — and a spawned ``claude -p`` does not inherit an
+    interactive login either. Without this, a repo with a perfectly good key in
+    ``.env`` still produces "Not logged in" from every coding role.
+    """
+    env = _ROOT / ".env"
+    if not env.exists():
+        return
+    for line in env.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip())
+
+
 def claude_available() -> bool:
     return shutil.which("claude") is not None
 
@@ -51,6 +73,7 @@ def check_auth(timeout_s: float = 60.0) -> tuple[bool, str]:
     coding role would return empty and the pod would fall back to the trivial
     kernel while looking, from the outside, like it was working.
     """
+    load_dotenv()
     if not claude_available():
         return False, "`claude` CLI not found on PATH"
     try:
@@ -114,6 +137,7 @@ def run_claude_code(
     than raising, because a failed coding attempt is information the Manager
     must see, not an exception that kills the pod.
     """
+    load_dotenv()
     if not claude_available():
         raise ClaudeCodeUnavailable("`claude` CLI not found on PATH")
 

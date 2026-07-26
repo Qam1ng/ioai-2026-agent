@@ -13,6 +13,7 @@ submitting anything scores zero.
 
 from __future__ import annotations
 
+import threading
 import time
 import traceback
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -71,6 +72,8 @@ class TaskPod:
         self._errors: list[str] = []
         self._floor_done = False
         self._stop_reason = ""
+        self._shutdown = threading.Event()
+        self._watchdog: threading.Thread | None = None
 
     # ------------------------------------------------------------- roles
     def _role(self, name: str, **kwargs: Any):
@@ -119,6 +122,35 @@ class TaskPod:
         if self._minutes() >= last_call:
             return "final submission buffer reached"
         return None
+
+    def _start_floor_watchdog(self) -> None:
+        """Guarantee the floor submission on a clock the main flow cannot delay.
+
+        Bootstrap (profile, then design) runs before the Manager loop, so a
+        Profiler that spends twenty minutes exploring would push the insurance
+        submission past its deadline with nothing watching. Measured on the
+        radar task: profiling alone consumed its entire step budget. The
+        obligation therefore lives on its own thread, armed from pod start.
+        """
+
+        def _watch() -> None:
+            while not self._shutdown.is_set():
+                if self._has_floor():
+                    self._floor_done = True
+                    return
+                if self._minutes() >= self.cfg.gates.floor_submit_min:
+                    self.bb.event(
+                        "gate",
+                        gate="floor_watchdog",
+                        minutes=round(self._minutes(), 1),
+                        note="bootstrap had not produced a submission in time",
+                    )
+                    self._force_floor_submission()
+                    return
+                self._shutdown.wait(10)
+
+        self._watchdog = threading.Thread(target=_watch, name="floor-watchdog", daemon=True)
+        self._watchdog.start()
 
     def _force_floor_submission(self) -> None:
         """Submit the simplest thing that exists, right now.
@@ -464,6 +496,7 @@ class TaskPod:
                 stop_reason=f"preflight failed: {problem}",
                 errors=self._errors,
             )
+        self._start_floor_watchdog()
         try:
             self.ensure_task_card()
             self.ensure_plans(min(self.cfg.parallel.max_candidates + 1, 6))
@@ -520,6 +553,9 @@ class TaskPod:
             self._errors.append(traceback.format_exc()[-2000:])
             self._stop_reason = self._stop_reason or "pod crashed"
         finally:
+            self._shutdown.set()
+            if self._watchdog is not None:
+                self._watchdog.join(timeout=5)
             self._pool.shutdown(wait=False, cancel_futures=True)
 
         best = self.bb.best_candidate()
