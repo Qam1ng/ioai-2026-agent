@@ -1,13 +1,21 @@
-"""The verification contract: numbers come from a subprocess, never a model.
+"""The verification pipeline contract.
 
-These tests pin the two halves of the Verifier redesign: the pod can score a
-candidate by executing ``eval/run_eval.py`` deterministically, and when the
-harness is missing or broken the failure is a *finding* rather than a crash.
+Three invariants, each paid for in rehearsal time:
+
+1. Numbers come from the deterministic harness subprocess, never a model
+   transcript.
+2. Verification is a pipeline: a candidate becoming ready flows to verified
+   without a Manager decision (a synchronous verify once froze the Manager
+   loop for 15.2 minutes).
+3. A verified score that clears the significance gate is submitted to the
+   milestone lane automatically (a verified 0.1378 once never reached the
+   leaderboard because nothing ever asked the broker).
 """
 
 from __future__ import annotations
 
 import json
+import time
 
 from swarm.budget import PodBudget, QuotaPool
 from swarm.bus import Blackboard
@@ -16,7 +24,33 @@ from swarm.pod import TaskPod
 from swarm.schemas import CandidateState, ManagerAction, TaskCard
 
 
-def make_pod(tmp_path) -> TaskPod:
+class RecordingBroker:
+    """Counts submissions; approves or denies milestone per configuration."""
+
+    def __init__(self, allow_milestone: bool = True):
+        self.allow_milestone = allow_milestone
+        self.submissions: list[dict] = []
+
+    def may_submit(self, lane, local_score=None, candidate_id=None, accelerator=None):
+        if lane == "milestone" and not self.allow_milestone:
+            return False, "gain inside the noise band"
+        return True, f"{lane} allowed"
+
+    def submit(self, **kw):
+        self.submissions.append(kw)
+
+        class Rec:
+            sub_id = f"sub-test-{len(self.submissions)}"
+            lane = kw["lane"]
+            lb_score = None
+
+        return Rec()
+
+    def poll_scores(self):
+        return 0
+
+
+def make_pod(tmp_path, broker=None) -> TaskPod:
     cfg = SwarmConfig()
     cfg.slug = "test-comp"
     cfg.dry_run = True
@@ -24,12 +58,7 @@ def make_pod(tmp_path) -> TaskPod:
     quota = QuotaPool(tmp_path / "q.json", limit_hours=1.0)
     budget = PodBudget(tmp_path / "b.json", deadline_s=3600, quota=quota)
     bb.put_task_card(TaskCard(slug=cfg.slug, task_type="supervised", metric_name="acc"))
-
-    class NullBroker:
-        def submit(self, **kw):  # pragma: no cover - not reached in these tests
-            raise AssertionError("no submissions expected")
-
-    return TaskPod(cfg, bb, budget, quota, NullBroker())
+    return TaskPod(cfg, bb, budget, quota, broker or RecordingBroker())
 
 
 HARNESS_OK = """
@@ -49,38 +78,54 @@ sys.exit(3)
 """
 
 
+def write_candidate(pod, family="baseline", with_kernel=True, gpu=False) -> CandidateState:
+    cand = CandidateState(family=family, status="ready")
+    cand.kernel_dir = f"candidates/{cand.candidate_id}"
+    pod.bb.put_candidate(cand)
+    d = pod.bb.candidate_dir(cand.candidate_id)
+    if with_kernel:
+        (d / "kernel.py").write_text("print('kernel')\n")
+        (d / "kernel-metadata.json").write_text(
+            json.dumps(
+                {
+                    "enable_gpu": "true" if gpu else "false",
+                    "machine_shape": "NvidiaTeslaT4" if gpu else "",
+                }
+            )
+        )
+    return cand
+
+
+def install_harness(pod, code=HARNESS_OK):
+    eval_dir = pod.bb.ws / "eval"
+    eval_dir.mkdir(exist_ok=True)
+    (eval_dir / "run_eval.py").write_text(code)
+
+
+def wait_verified(pod, cid, timeout=15.0):
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        c = pod.bb.get_candidate(cid)
+        if c is not None and c.local_score is not None:
+            return c
+        with pod._verify_lock:
+            inflight = cid in pod._verify_inflight
+        if not inflight and c is not None and c.local_score is None:
+            # worker finished without a score
+            return c
+        time.sleep(0.1)
+    raise AssertionError("verification did not finish in time")
+
+
+# ------------------------------------------------------------ subprocess truth
 def test_missing_harness_returns_none(tmp_path):
     pod = make_pod(tmp_path)
     assert pod._run_eval_harness("cand-x") is None
 
 
-def test_harness_numbers_flow_into_candidate_state(tmp_path):
-    pod = make_pod(tmp_path)
-    cand = CandidateState(family="baseline", status="coding")
-    pod.bb.put_candidate(cand)
-
-    eval_dir = pod.bb.ws / "eval"
-    eval_dir.mkdir()
-    (eval_dir / "run_eval.py").write_text(HARNESS_OK)
-
-    obs = pod._do_verify(ManagerAction(action="verify", target=cand.candidate_id))
-    assert "0.75" in obs
-
-    back = pod.bb.get_candidate(cand.candidate_id)
-    assert back.local_score == 0.75
-    assert back.local_std == 0.02
-    assert back.folds == [0.73, 0.75, 0.77]
-    assert back.status == "ready"
-
-    exps = pod.bb.get_experiments()
-    assert exps and exps[-1].role == "verify" and exps[-1].accepted
-
-
 def test_harness_is_deterministic_across_reruns(tmp_path):
     pod = make_pod(tmp_path)
-    eval_dir = pod.bb.ws / "eval"
-    eval_dir.mkdir()
-    (eval_dir / "run_eval.py").write_text(HARNESS_OK)
+    install_harness(pod)
     a = pod._run_eval_harness("cand-1")
     b = pod._run_eval_harness("cand-1")
     assert a == b, "the whole point of the harness is that re-measurement is identical"
@@ -88,39 +133,125 @@ def test_harness_is_deterministic_across_reruns(tmp_path):
 
 def test_broken_harness_is_a_finding_not_a_crash(tmp_path):
     pod = make_pod(tmp_path)
-    eval_dir = pod.bb.ws / "eval"
-    eval_dir.mkdir()
-    (eval_dir / "run_eval.py").write_text(HARNESS_BROKEN)
+    install_harness(pod, HARNESS_BROKEN)
     out = pod._run_eval_harness("cand-1")
     assert out is not None
     assert out.get("local_score") is None
     assert any("no JSON" in p for p in out.get("problems", []))
 
 
-def test_verify_without_harness_uses_verifier_role_then_reruns(tmp_path):
-    """When no harness exists, the Verifier role is invoked to build one, and
-    the numbers are then taken from the harness it built — not its transcript."""
+# --------------------------------------------------------------- the pipeline
+def test_verify_pipeline_scores_candidate_without_manager(tmp_path):
     pod = make_pod(tmp_path)
-    cand = CandidateState(family="baseline")
+    install_harness(pod)
+    cand = write_candidate(pod)
+    assert pod._enqueue_verify(cand.candidate_id)
+    got = wait_verified(pod, cand.candidate_id)
+    assert got.local_score == 0.75
+    assert got.folds == [0.73, 0.75, 0.77]
+    exps = pod.bb.get_experiments()
+    assert exps and exps[-1].role == "verify" and exps[-1].accepted
+
+
+def test_duplicate_enqueue_is_ignored(tmp_path):
+    pod = make_pod(tmp_path)
+    install_harness(pod)
+    cand = write_candidate(pod)
+    first = pod._enqueue_verify(cand.candidate_id)
+    second = pod._enqueue_verify(cand.candidate_id)
+    assert first is True
+    # Either the first finished already (fast harness) or the second is a dup.
+    if second:
+        wait_verified(pod, cand.candidate_id)
+    else:
+        assert second is False
+    wait_verified(pod, cand.candidate_id)
+
+
+def test_verified_score_auto_submits_milestone(tmp_path):
+    broker = RecordingBroker(allow_milestone=True)
+    pod = make_pod(tmp_path, broker)
+    install_harness(pod)
+    cand = write_candidate(pod, gpu=True)
+    pod._enqueue_verify(cand.candidate_id)
+    wait_verified(pod, cand.candidate_id)
+    time.sleep(0.3)  # milestone fires inside the worker after scoring
+    lanes = [s["lane"] for s in broker.submissions]
+    assert "milestone" in lanes, "a verified score must reach the leaderboard unprompted"
+    sub = next(s for s in broker.submissions if s["lane"] == "milestone")
+    assert sub["accelerator"] == "t4", "accelerator must come from the kernel metadata"
+    assert sub["local_score"] == 0.75
+
+
+def test_gated_milestone_is_not_submitted(tmp_path):
+    broker = RecordingBroker(allow_milestone=False)
+    pod = make_pod(tmp_path, broker)
+    install_harness(pod)
+    cand = write_candidate(pod)
+    pod._enqueue_verify(cand.candidate_id)
+    wait_verified(pod, cand.candidate_id)
+    time.sleep(0.3)
+    assert all(s["lane"] != "milestone" for s in broker.submissions)
+    # but the gate decision itself must be on the audit trail
+    events = [json.loads(l) for l in open(pod.bb.events_path) if l.strip()]
+    gates = [e for e in events if e.get("kind") == "milestone_gate"]
+    assert gates and gates[-1]["allowed"] is False
+
+
+def test_dispatch_verify_queues_and_returns_immediately(tmp_path):
+    pod = make_pod(tmp_path)
+    install_harness(pod)
+    cand = write_candidate(pod)
+    t0 = time.time()
+    obs = pod.dispatch(ManagerAction(action="verify", target=cand.candidate_id))
+    assert time.time() - t0 < 2.0, "verify must not block the manager loop"
+    assert "queued" in obs or "already" in obs
+    wait_verified(pod, cand.candidate_id)
+
+
+# ----------------------------------------------------------------- floor path
+def test_floor_prefers_ready_candidate_over_fallback(tmp_path):
+    """The rehearsal bug: a ready-but-unscored floor kernel sat unused while a
+    sample-echo fallback (guaranteed to fail on this competition) was
+    submitted. Ready candidates must win regardless of having a score."""
+    broker = RecordingBroker()
+    pod = make_pod(tmp_path, broker)
+    write_candidate(pod, family="cnn")
+    floor = write_candidate(pod, family="floor")
+    pod._force_floor_submission()
+    assert broker.submissions, "floor must submit something"
+    sub = broker.submissions[0]
+    assert sub["lane"] == "floor"
+    assert sub["candidate_id"] == floor.candidate_id, "floor family wins the tie"
+
+
+def test_floor_falls_back_to_trivial_kernel_when_nothing_ready(tmp_path):
+    broker = RecordingBroker()
+    pod = make_pod(tmp_path, broker)
+    pod._force_floor_submission()
+    assert broker.submissions[0]["candidate_id"] == "fallback"
+
+
+def test_floor_healthy_ignores_errored_submissions(tmp_path):
+    from swarm.schemas import SubmissionRecord
+
+    pod = make_pod(tmp_path)
+    rec = SubmissionRecord(lane="floor", candidate_id="fallback", status="error")
+    pod.bb.add_submission(rec)
+    assert pod._floor_healthy() is False, "an errored floor is no floor at all"
+
+
+# ------------------------------------------------------------------ aggregate
+def test_aggregate_falls_back_to_best_single_candidate(tmp_path):
+    """With exactly one scored candidate there is nothing to ensemble; the
+    final entry must still exist."""
+    broker = RecordingBroker()
+    pod = make_pod(tmp_path, broker)
+    cand = write_candidate(pod)
+    cand.local_score = 0.6
     pod.bb.put_candidate(cand)
-
-    class FakeVerifier:
-        def run(self, instructions, context=None):
-            # Simulate the role building a real harness on disk.
-            eval_dir = pod.bb.ws / "eval"
-            eval_dir.mkdir(exist_ok=True)
-            (eval_dir / "run_eval.py").write_text(HARNESS_OK)
-
-            class R:
-                ok = True
-                error = ""
-                elapsed_s = 1.0
-                # Deliberately wrong number in the report: the subprocess must win.
-                report = {"local_score": 0.99, "local_std": 0.0, "folds": [0.99]}
-
-            return R()
-
-    pod._roles_override["verifier"] = FakeVerifier()
-    pod._do_verify(ManagerAction(action="verify", target=cand.candidate_id))
-    back = pod.bb.get_candidate(cand.candidate_id)
-    assert back.local_score == 0.75, "harness measurement must override the model's claim"
+    assert pod._start_aggregate("test") is True
+    pod._aggregate_thread.join(timeout=10)
+    finals = [s for s in broker.submissions if s["lane"] == "final"]
+    assert finals and finals[0]["candidate_id"] == cand.candidate_id
+    assert pod._start_aggregate("test") is False, "aggregate runs exactly once"

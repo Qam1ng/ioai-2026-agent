@@ -39,10 +39,18 @@ grouping variable here poisons every candidate for the rest of the window.
 5. `memory_recall` for lessons about this data modality and about Kaggle kernel
    paths. Note anything that changes the plan.
 6. Lift every rule from the task text into a `constraint` with `kind`
-   (`must` / `must_not`) and the **verbatim** `quote`. Include the standing
-   competition rules that always apply: no pretrained-checkpoint upload, no
-   internet inside the kernel, fixed package list, the model trains inside the
-   kernel itself.
+   (`must` / `must_not`) and the **verbatim** `quote`. A constraint is a RULE
+   from the organisers, quoted verbatim from a text/statement file in the
+   bundle, with the source filename recorded in `rationale`. Facts about code
+   or data format (what the baseline script does, how labels are encoded, what
+   `to_csv` writes) belong in `data_summary` or `submission_format`, never in
+   `constraints`. Rules you recall from memory or general knowledge belong in
+   `risks`, marked `unsourced`. A quote that cannot be traced to a bundle file
+   will be treated as fabricated in an audit. The standing competition rules
+   (no pretrained-checkpoint upload, no internet inside the kernel, fixed
+   package list, the model trains inside the kernel itself) follow the same
+   bar: quote them from a bundle file that states them; if no file does, list
+   them in `risks` marked `unsourced`.
 7. Set `routing_confidence` in 0..1 for your `task_type` call. Below 0.6 the pod
    runs two playbooks in parallel, so an honest low number is cheap and a
    confident wrong number is expensive.
@@ -69,7 +77,7 @@ End with exactly one fenced json block:
   "submission_format": "exact columns, row count, id order, dtype/value range",
   "data_summary": "files, sizes, row counts, modality, label distribution, runtime discovery rule for /kaggle/input",
   "constraints": [
-    {{"kind": "must_not", "quote": "verbatim sentence from the task", "rationale": "why this binds us"}}
+    {{"kind": "must_not", "quote": "verbatim sentence from the task", "rationale": "source filename in the bundle + why this binds us"}}
   ],
   "grouping_variable": "column name or empty string",
   "risks": ["short concrete risk statements"],

@@ -74,6 +74,18 @@ class TaskPod:
         self._stop_reason = ""
         self._shutdown = threading.Event()
         self._watchdog: threading.Thread | None = None
+        # Verification is a pipeline, not a Manager decision: candidates flow
+        # ready -> verified -> (milestone) on their own. One worker, because a
+        # verification runs fold training and two at once would thrash the CPU.
+        self._verify_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="verify")
+        self._verify_inflight: set[str] = set()
+        self._verify_lock = threading.Lock()
+        self._harness_lock = threading.Lock()
+        self._frozen = False
+        self._aggregate_started = False
+        self._aggregate_thread: threading.Thread | None = None
+        self._cand_started: dict[str, float] = {}
+        self._action_log: list[dict] = []
 
     # ------------------------------------------------------------- roles
     def _role(self, name: str, **kwargs: Any):
@@ -107,84 +119,118 @@ class TaskPod:
         if self._has_floor():
             self._floor_done = True
 
-        # Obligation 1: a valid submission must exist early. Everything else is
-        # optional; this is not. A pod with no submission scores zero, and the
-        # score is normalised within the AI track, so zero is maximally costly.
-        if self.floor_overdue():
-            self.bb.event("gate", gate="floor_overdue", minutes=round(self._minutes(), 1))
-            self._force_floor_submission()
-
-        # Obligation 2: after the freeze, stop opening new directions.
-        if self.in_freeze():
-            self.bb.event("gate", gate="freeze", minutes=round(self._minutes(), 1))
+        # Floor, freeze and freeze-time aggregation are owned by the gates
+        # watchdog thread; the loop only honours the flags.
 
         last_call = self.cfg.deadline_min - self.cfg.gates.final_submit_buffer_min
         if self._minutes() >= last_call:
             return "final submission buffer reached"
         return None
 
-    def _start_floor_watchdog(self) -> None:
-        """Guarantee the floor submission on a clock the main flow cannot delay.
+    def _floor_healthy(self) -> bool:
+        """A floor exists and has not errored. `scored`/`queued`/`running` count;
+        an errored floor is no floor at all — that distinction is the fix for
+        the rehearsal's silent failure mode, where a fallback kernel that
+        cannot work on this competition sat in the log marked 'scored'."""
+        return any(
+            s.lane == "floor" and s.status != "error" for s in self.bb.get_submissions()
+        )
 
-        Bootstrap (profile, then design) runs before the Manager loop, so a
-        Profiler that spends twenty minutes exploring would push the insurance
-        submission past its deadline with nothing watching. Measured on the
-        radar task: profiling alone consumed its entire step budget. The
-        obligation therefore lives on its own thread, armed from pod start.
+    def _start_gates_watchdog(self) -> None:
+        """Every deterministic obligation, on a clock the main flow cannot stall.
+
+        The rehearsal proved gates must not depend on the Manager loop being
+        alive: a synchronous dispatch froze the loop for 15 minutes and the
+        freeze gate was only stamped when the loop happened to return. This
+        thread owns: the floor deadline, floor retry after an errored
+        submission, the freeze flag, and freeze-time aggregation.
         """
 
         def _watch() -> None:
             while not self._shutdown.is_set():
-                if self._has_floor():
-                    self._floor_done = True
-                    return
-                if self._minutes() >= self.cfg.gates.floor_submit_min:
-                    self.bb.event(
-                        "gate",
-                        gate="floor_watchdog",
-                        minutes=round(self._minutes(), 1),
-                        note="bootstrap had not produced a submission in time",
-                    )
-                    self._force_floor_submission()
-                    return
+                m = self._minutes()
+                try:
+                    # -- floor: insurance by the deadline, and re-insurance on error
+                    if not self._floor_healthy():
+                        if self._floor_done or m >= self.cfg.gates.floor_submit_min:
+                            self.bb.event(
+                                "gate", gate="floor_watchdog", minutes=round(m, 1)
+                            )
+                            self._force_floor_submission()
+                    else:
+                        self._floor_done = True
+
+                    # -- freeze: flip once, then make consolidation actually happen
+                    if m >= self.cfg.gates.freeze_min and not self._frozen:
+                        self._frozen = True
+                        self.bb.event("gate", gate="freeze", minutes=round(m, 1))
+                    if self._frozen and not self._aggregate_started:
+                        scored = [
+                            c
+                            for c in self.bb.get_candidates()
+                            if c.local_score is not None
+                        ]
+                        has_final = any(
+                            s.lane == "final" for s in self.bb.get_submissions()
+                        )
+                        if scored and not has_final:
+                            self._start_aggregate("freeze watchdog")
+                except Exception as exc:  # the watchdog itself must never die
+                    self._errors.append(f"gates watchdog: {exc}")
                 self._shutdown.wait(10)
 
-        self._watchdog = threading.Thread(target=_watch, name="floor-watchdog", daemon=True)
+        self._watchdog = threading.Thread(target=_watch, name="gates-watchdog", daemon=True)
         self._watchdog.start()
 
     def _force_floor_submission(self) -> None:
-        """Submit the simplest thing that exists, right now.
+        """Submit the best thing that exists, right now.
 
-        Called when the Manager has not produced a floor submission in time.
-        Prefers a real candidate; falls back to a trivial constant-prediction
-        kernel, because a scored trivial submission beats an unscored good one.
+        Preference order matters and was measured to matter: any READY
+        candidate with a kernel on disk (floor family first) beats the generic
+        fallback — the old code asked ``best_candidate()``, which only returns
+        *scored* candidates, so a ready-but-unscored floor kernel sat unused
+        while a sample-echo fallback (which cannot work on a competition that
+        ships no sample file) was submitted instead.
         """
         try:
-            best = self.bb.best_candidate()
-            if best is not None and best.kernel_dir:
-                code = (Path(self.bb.ws) / best.kernel_dir / "kernel.py")
-                if code.exists():
-                    self.broker.submit(
-                        code=code.read_text(),
-                        candidate_id=best.candidate_id,
-                        lane="floor",
-                        purpose="forced floor submission (gate)",
-                        accelerator="cpu",
-                        local_score=best.local_score,
-                    )
-                    self._floor_done = True
+            ready = [
+                c
+                for c in self.bb.get_candidates()
+                if c.status == "ready"
+                and c.kernel_dir
+                and (self.bb.ws / c.kernel_dir / "kernel.py").exists()
+            ]
+            # floor family first, then scored ones, then whatever is ready
+            ready.sort(key=lambda c: (c.family != "floor", c.local_score is None))
+            for cand in ready:
+                code = self.bb.ws / cand.kernel_dir / "kernel.py"
+                ok, why = self.broker.may_submit("floor")
+                if not ok:
+                    self.bb.event("gate_error", gate="floor", error=why)
                     return
-            fallback = self._fallback_kernel()
-            if fallback:
                 self.broker.submit(
-                    code=fallback,
-                    candidate_id="fallback",
+                    code=code.read_text(),
+                    candidate_id=cand.candidate_id,
                     lane="floor",
-                    purpose="forced floor submission (trivial fallback)",
+                    purpose=f"floor submission ({cand.family} candidate)",
                     accelerator="cpu",
-                    local_score=None,
+                    local_score=cand.local_score,
                 )
                 self._floor_done = True
+                return
+            ok, why = self.broker.may_submit("floor")
+            if not ok:
+                self.bb.event("gate_error", gate="floor", error=why)
+                return
+            self.broker.submit(
+                code=self._fallback_kernel(),
+                candidate_id="fallback",
+                lane="floor",
+                purpose="forced floor submission (trivial fallback; no candidate ready)",
+                accelerator="cpu",
+                local_score=None,
+            )
+            self._floor_done = True
         except Exception as exc:
             self._errors.append(f"floor submission failed: {exc}")
             self.bb.event("gate_error", gate="floor", error=str(exc))
@@ -317,6 +363,11 @@ class TaskPod:
                         reject_reason=res.error,
                     )
                 )
+                # Ready flows straight into verification. In the rehearsal the
+                # floor candidate sat ready and unmeasured for 24 minutes
+                # because verification waited on a Manager decision.
+                if c.status == "ready":
+                    self._enqueue_verify(c.candidate_id)
             except Exception:
                 c = self.bb.get_candidate(cand.candidate_id) or cand
                 c.status = "failed"
@@ -325,6 +376,7 @@ class TaskPod:
                 self._errors.append(f"candidate {cand.candidate_id} crashed")
 
         self._futures[cand.candidate_id] = self._pool.submit(_work)
+        self._cand_started[cand.candidate_id] = time.time()
         self.bb.event("candidate_launched", candidate_id=cand.candidate_id, family=plan.family)
         return cand.candidate_id
 
@@ -379,7 +431,16 @@ class TaskPod:
                 return f"tune on {cid}: ok={res.ok}"
 
             if a == "verify":
-                return self._do_verify(action)
+                cid = action.target
+                if not cid or self.bb.get_candidate(cid) is None:
+                    return f"unknown candidate: {cid!r}"
+                queued = self._enqueue_verify(cid, requeue=True)
+                return (
+                    f"re-verification of {cid} queued (runs on the verify worker; "
+                    f"the loop continues)"
+                    if queued
+                    else f"{cid} is already being verified"
+                )
 
             if a == "probe":
                 return self._do_probe(action)
@@ -394,11 +455,27 @@ class TaskPod:
                 return f"retired {action.target}"
 
             if a == "aggregate":
-                return self._do_aggregate(action)
+                started = self._start_aggregate("manager")
+                return (
+                    "aggregation started in the background"
+                    if started
+                    else "aggregation already ran or is running"
+                )
 
             if a == "wait":
-                time.sleep(5)
-                return f"waited; {self._running()} candidates running"
+                # Block until the world changes or ~60s passes. The rehearsal
+                # Manager burned eight Opus calls polling a snapshot that could
+                # not have changed; a wait that actually waits makes each
+                # Manager step worth reading.
+                before = self._progress_key(self.bb.snapshot())
+                deadline = time.time() + 60
+                while time.time() < deadline and not self._shutdown.is_set():
+                    time.sleep(5)
+                    if self._progress_key(self.bb.snapshot()) != before:
+                        return f"state changed while waiting; {self._running()} running"
+                    if self._stop_reason:
+                        break
+                return f"waited 60s; {self._running()} candidates running, no state change"
 
             if a == "stop":
                 self._stop_reason = action.reason or "manager stopped"
@@ -545,74 +622,146 @@ class TaskPod:
             "error": (proc.stderr or proc.stdout or "")[-400:],
         }
 
-    def _do_verify(self, action: ManagerAction) -> str:
-        """Verify = measure with the harness; build the harness if it is missing.
+    def _enqueue_verify(self, candidate_id: str, requeue: bool = False) -> bool:
+        """Queue a candidate for verification. Returns False if already queued."""
+        with self._verify_lock:
+            if candidate_id in self._verify_inflight and not requeue:
+                return False
+            self._verify_inflight.add(candidate_id)
+        self.bb.event("verify_queued", candidate_id=candidate_id)
+        self._verify_pool.submit(self._verify_worker, candidate_id)
+        return True
 
-        The Verifier LLM's product is the harness (and the red-team findings),
-        never the number itself. The number always comes from the subprocess.
+    def _verify_worker(self, cid: str) -> None:
+        """Measure one candidate; runs on the verify thread, never the Manager's.
+
+        In the rehearsal a synchronous verify froze the Manager loop for 15.2
+        minutes, during which two candidates finished unnoticed and the freeze
+        gate passed with nobody watching. Verification is mechanical once the
+        harness exists, so it lives in a pipeline the Manager merely observes.
         """
-        cid = action.target
-        cand = self.bb.get_candidate(cid) if cid else None
-        if cand is None:
-            return f"unknown candidate: {cid!r}"
-
-        result = self._run_eval_harness(cid)
-        built = False
-        role_error = ""
-        elapsed = 0.0
-        if result is None:
-            role = self._role("verifier")
-            res = role.run(
-                (action.instructions + "\n\n" if action.instructions else "")
-                + f"No eval/ harness exists yet. Build it (metric.py with passing self-test, "
-                f"run_eval.py honouring the contract), then verify candidate {cid} by "
-                f"running it. Also report your red-team findings.",
-                context={
-                    "candidate": cand.to_dict(),
-                    "task_card": (self.bb.get_task_card() or TaskCard(self.cfg.slug)).to_dict(),
-                },
-            )
-            built, role_error, elapsed = res.ok, res.error, res.elapsed_s
-            # Trust the subprocess over the transcript: re-run the harness the
-            # Verifier just built and take THOSE numbers.
+        try:
+            cand = self.bb.get_candidate(cid)
+            if cand is None:
+                return
             result = self._run_eval_harness(cid)
-            if result is None and res.report:
-                result = res.report  # harness missing; report is better than nothing
-                result.setdefault("problems", []).append(
-                    "verifier emitted numbers but no eval/run_eval.py harness"
+            built = False
+            elapsed = 0.0
+            if result is None:
+                with self._harness_lock:  # the harness is built exactly once
+                    result = self._run_eval_harness(cid)
+                    if result is None:
+                        role = self._role("verifier")
+                        res = role.run(
+                            "No eval/ harness exists yet. Build it (metric.py with a passing "
+                            "self-test, run_eval.py honouring the black-box contract), then "
+                            f"verify candidate {cid} by running it. Report red-team findings.",
+                            context={
+                                "candidate": cand.to_dict(),
+                                "task_card": (
+                                    self.bb.get_task_card() or TaskCard(self.cfg.slug)
+                                ).to_dict(),
+                            },
+                        )
+                        built, elapsed = res.ok, res.elapsed_s
+                        # The subprocess outranks the transcript.
+                        result = self._run_eval_harness(cid)
+                        if result is None and res.report:
+                            result = res.report
+                            result.setdefault("problems", []).append(
+                                "verifier emitted numbers but no eval/run_eval.py harness"
+                            )
+            if not result:
+                self.bb.event("verify_failed", candidate_id=cid, reason="no harness, no report")
+                return
+
+            score = result.get("local_score")
+            if score is not None:
+                cand.local_score = float(score)
+                cand.local_std = float(result.get("local_std") or 0.0)
+                cand.folds = list(result.get("folds") or [])
+                cand.status = "ready"
+                self.bb.put_candidate(cand)
+                self.bb.put_calibration(fit_calibration(self.bb))
+            self.bb.add_experiment(
+                Experiment(
+                    candidate_id=cid,
+                    role="verify",
+                    description=("harness" + ("+build" if built else ""))
+                    if score is not None
+                    else "verify failed",
+                    local_score=cand.local_score,
+                    local_std=cand.local_std,
+                    folds=cand.folds,
+                    runtime_s=elapsed,
+                    accepted=score is not None,
+                    reject_reason="; ".join(map(str, result.get("problems") or []))[:400],
                 )
-
-        if not result:
-            return f"verify on {cid}: no harness and no report ({role_error or 'unknown'})"
-
-        score = result.get("local_score")
-        if score is not None:
-            cand.local_score = float(score)
-            cand.local_std = float(result.get("local_std") or 0.0)
-            cand.folds = list(result.get("folds") or [])
-            cand.status = "ready"
-            self.bb.put_candidate(cand)
-            self.bb.put_calibration(fit_calibration(self.bb))
-        self.bb.add_experiment(
-            Experiment(
-                candidate_id=cid,
-                role="verify",
-                description=("harness" + ("+build" if built else ""))
-                if score is not None
-                else "verify failed",
-                local_score=cand.local_score,
-                local_std=cand.local_std,
-                folds=cand.folds,
-                runtime_s=elapsed,
-                accepted=score is not None,
-                reject_reason="; ".join(map(str, result.get("problems") or []))[:400],
             )
+            self.bb.event(
+                "verified",
+                candidate_id=cid,
+                local_score=cand.local_score,
+                problems=(result.get("problems") or [])[:3],
+            )
+            # A verified score that clears the gate goes to the leaderboard
+            # without waiting to be asked: leaderboard points are what buy the
+            # calibration every later decision depends on.
+            if score is not None:
+                self._try_milestone(cand)
+        except Exception:
+            self._errors.append(f"verify worker crashed for {cid}: {traceback.format_exc()[-600:]}")
+            self.bb.event("verify_failed", candidate_id=cid, reason="worker crash")
+        finally:
+            with self._verify_lock:
+                self._verify_inflight.discard(cid)
+
+    def _candidate_accelerator(self, cand: CandidateState) -> str:
+        """Read the accelerator the coder declared in its kernel metadata."""
+        import json as _json
+
+        meta = self.bb.ws / cand.kernel_dir / "kernel-metadata.json"
+        try:
+            d = _json.loads(meta.read_text())
+        except (OSError, ValueError):
+            return "cpu"
+        if str(d.get("enable_gpu", "false")).lower() not in ("true", "1"):
+            return "cpu"
+        shape = str(d.get("machine_shape", "") or "")
+        return "p100" if "P100" in shape else "t4"
+
+    def _try_milestone(self, cand: CandidateState) -> None:
+        """Submit a verified candidate when the significance gate clears.
+
+        This closes the rehearsal's largest gap: a verified 0.1378 that never
+        reached the leaderboard because no code path ever asked the broker for
+        the milestone lane.
+        """
+        kernel = self.bb.ws / cand.kernel_dir / "kernel.py"
+        if not kernel.exists():
+            return
+        accel = self._candidate_accelerator(cand)
+        ok, why = self.broker.may_submit(
+            "milestone", local_score=cand.local_score, candidate_id=cand.candidate_id,
+            accelerator=accel,
         )
-        problems = result.get("problems") or []
-        return (
-            f"verify on {cid}: score={cand.local_score} std={cand.local_std} "
-            f"problems={problems[:3]}"
+        self.bb.event(
+            "milestone_gate", candidate_id=cand.candidate_id, allowed=ok, why=why[:200]
         )
+        if not ok:
+            return
+        try:
+            rec = self.broker.submit(
+                code=kernel.read_text(),
+                candidate_id=cand.candidate_id,
+                lane="milestone",
+                purpose=f"verified {cand.family} local={cand.local_score}",
+                accelerator=accel,
+                local_score=cand.local_score,
+            )
+            self.bb.event("milestone_submitted", candidate_id=cand.candidate_id, sub_id=rec.sub_id)
+        except Exception as exc:
+            self._errors.append(f"milestone submit failed for {cand.candidate_id}: {exc}")
 
     #: Prompt-schema kinds -> swarm.submit.probes registry names. The Prober
     #: PLANS probes (kind + hypothesis + decision rule); the kernel code always
@@ -668,34 +817,79 @@ class TaskPod:
             out += f" (skipped: {skipped[:3]})"
         return out
 
-    def _do_aggregate(self, action: ManagerAction) -> str:
-        role = self._role("aggregator", sandbox=self.bb.ws)
-        ready = [c.to_dict() for c in self.bb.get_candidates() if c.local_score is not None]
-        if not ready:
-            return "nothing to aggregate: no scored candidate"
-        res = role.run(
-            action.instructions
-            or "Combine the scored candidates into the strongest single kernel that fits the "
-            "runtime budget. Do not retrain from scratch.",
-            context={"candidates": ready, "calibration": self.bb.get_calibration().to_dict()},
+    def _start_aggregate(self, trigger: str) -> bool:
+        """Kick off final consolidation exactly once, off the Manager's thread.
+
+        Fired by the freeze watchdog (the normal path — the rehearsal showed
+        aggregation never happens if it waits for a Manager that may be busy)
+        or by an explicit Manager action.
+        """
+        if self._aggregate_started:
+            return False
+        self._aggregate_started = True
+        self.bb.event("aggregate_start", trigger=trigger)
+        self._aggregate_thread = threading.Thread(
+            target=self._run_aggregate, name="aggregate", daemon=True
         )
-        report = res.report or {}
-        code = report.get("code", "")
-        if not code:
-            return "aggregator produced no code"
-        ok, why = self.broker.may_submit("final")
-        if not ok:
-            return f"final submission blocked: {why}"
-        rec = self.broker.submit(
-            code=code,
-            candidate_id="ensemble",
-            lane="final",
-            purpose=report.get("strategy", "ensemble"),
-            accelerator=report.get("accelerator", "cpu"),
-            # The schema calls the ensemble's out-of-fold score "oof_score".
-            local_score=report.get("oof_score", report.get("local_score")),
-        )
-        return f"final submission: {rec.sub_id}"
+        self._aggregate_thread.start()
+        return True
+
+    def _run_aggregate(self) -> None:
+        try:
+            scored = [c for c in self.bb.get_candidates() if c.local_score is not None]
+            if len(scored) >= 2:
+                role = self._role("aggregator", sandbox=self.bb.ws)
+                res = role.run(
+                    "Combine the scored candidates into the strongest single kernel that "
+                    "fits the runtime budget. Do not retrain from scratch.",
+                    context={
+                        "candidates": [c.to_dict() for c in scored],
+                        "calibration": self.bb.get_calibration().to_dict(),
+                    },
+                )
+                report = res.report or {}
+                code = report.get("code", "")
+                if code:
+                    ok, why = self.broker.may_submit("final")
+                    if ok:
+                        rec = self.broker.submit(
+                            code=code,
+                            candidate_id="ensemble",
+                            lane="final",
+                            purpose=report.get("strategy", "ensemble"),
+                            accelerator=report.get("accelerator", "cpu"),
+                            # The aggregator schema names its OOF score "oof_score".
+                            local_score=report.get("oof_score", report.get("local_score")),
+                        )
+                        self.bb.event("final_submitted", sub_id=rec.sub_id, via="ensemble")
+                        return
+                    self.bb.event("aggregate_blocked", why=why[:200])
+            # One (or zero ensemble-worthy) scored candidates: the best single
+            # verified kernel IS the final. Better a proven single model than
+            # no final entry at all.
+            best = self.bb.best_candidate()
+            if best is None:
+                self.bb.event("aggregate_skipped", why="no scored candidate")
+                return
+            kernel = self.bb.ws / best.kernel_dir / "kernel.py"
+            if not kernel.exists():
+                self.bb.event("aggregate_skipped", why=f"{best.candidate_id} has no kernel")
+                return
+            ok, why = self.broker.may_submit("final")
+            if not ok:
+                self.bb.event("aggregate_blocked", why=why[:200])
+                return
+            rec = self.broker.submit(
+                code=kernel.read_text(),
+                candidate_id=best.candidate_id,
+                lane="final",
+                purpose=f"best single verified candidate ({best.family})",
+                accelerator=self._candidate_accelerator(best),
+                local_score=best.local_score,
+            )
+            self.bb.event("final_submitted", sub_id=rec.sub_id, via="best_single")
+        except Exception:
+            self._errors.append(f"aggregate crashed: {traceback.format_exc()[-600:]}")
 
     # -------------------------------------------------------------- run
     def preflight(self) -> str | None:
@@ -726,7 +920,7 @@ class TaskPod:
                 stop_reason=f"preflight failed: {problem}",
                 errors=self._errors,
             )
-        self._start_floor_watchdog()
+        self._start_gates_watchdog()
         try:
             self.ensure_task_card()
             self.ensure_plans(min(self.cfg.parallel.max_candidates + 1, 6))
@@ -752,11 +946,25 @@ class TaskPod:
                 snapshot = self.bb.snapshot()
                 snapshot["budget"] = self.budget.status()
                 snapshot["minutes_elapsed"] = round(self._minutes(), 1)
-                snapshot["in_freeze"] = self.in_freeze()
-                snapshot["has_floor_submission"] = self._has_floor()
+                snapshot["in_freeze"] = self._frozen
+                snapshot["has_floor_submission"] = self._floor_healthy()
                 snapshot["running_candidates"] = self._running()
                 snapshot["free_slots"] = self._capacity()
                 snapshot["last_observation"] = observation
+                # Pipeline visibility: what the pod does on its own, so the
+                # Manager stops routing what no longer needs routing.
+                with self._verify_lock:
+                    snapshot["verify_queue"] = sorted(self._verify_inflight)
+                snapshot["aggregate_started"] = self._aggregate_started
+                now = time.time()
+                snapshot["candidate_runtimes_min"] = {
+                    cid: round((now - t0) / 60, 1)
+                    for cid, t0 in self._cand_started.items()
+                    if cid in self._futures and not self._futures[cid].done()
+                }
+                # Recent action history with outcomes: lets the Manager see a
+                # dead path as a *pattern*, not a one-off observation.
+                snapshot["recent_actions"] = self._action_log[-8:]
 
                 res = manager.run(
                     "Choose the single next action. Emit exactly one action object.",
@@ -771,6 +979,10 @@ class TaskPod:
                 )
                 observation = self.dispatch(action)
                 observation = self._check_progress(action, snapshot, observation)
+                self._action_log.append(
+                    {"action": action.action, "target": action.target,
+                     "observation": observation[:160]}
+                )
 
             # Consolidation happens whether or not the Manager asked for it.
             if not self._has_floor():
@@ -783,7 +995,10 @@ class TaskPod:
             self._shutdown.set()
             if self._watchdog is not None:
                 self._watchdog.join(timeout=5)
+            if self._aggregate_thread is not None:
+                self._aggregate_thread.join(timeout=120)
             self._pool.shutdown(wait=False, cancel_futures=True)
+            self._verify_pool.shutdown(wait=False, cancel_futures=True)
 
         best = self.bb.best_candidate()
         subs = self.bb.get_submissions()

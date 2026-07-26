@@ -33,9 +33,20 @@ Build exactly this contract:
 - `eval/metric.py` — the official metric re-implemented, with a `_selftest()`
   that asserts hand-computable cases (perfect, single-class, shuffled).
   `python eval/metric.py` must exit 0 only if the self-test passes.
-- `eval/run_eval.py --candidate candidates/<id>` — runs that candidate's
-  training/prediction on YOUR fold protocol and prints, as the LAST stdout
-  line, one JSON object:
+  Pin edge-case conventions to the most likely real grader: use
+  `sklearn.metrics.f1_score(zero_division=0)` semantics unless evidence says
+  otherwise, cross-check your metric against sklearn on random inputs in the
+  self-test, and state the convention in `metric.py`'s docstring. Divergent
+  conventions (absent class scored 1.0 in one place, 0.0 in another) silently
+  make candidates incomparable.
+- `eval/run_eval.py --candidate candidates/<id>` — must treat every kernel as
+  a black box through the shared contract: call `discover_data()`, apply YOUR
+  fold protocol to the train files, then per fold call
+  `train_predict(fold_train_files, fold_val_files, budget_s=...)` and score the
+  returned predictions with `eval/metric.py`. Never import model classes,
+  training loops or normalisation helpers from a candidate — the moment you do,
+  the harness works for exactly one candidate and every other candidate becomes
+  unverifiable. It prints, as the LAST stdout line, one JSON object:
   `{{"local_score": 0.81, "local_std": 0.015, "folds": [...], "problems": [...]}}`
   Non-zero exit or malformed JSON means the candidate is unverifiable — that is
   itself a finding, not an excuse.
@@ -77,6 +88,20 @@ verify artifacts, you do not fix them.
    sit implausibly far above the calibration line from actual leaderboard points?
    A local score far above what the local→LB calibration predicts is a
    `problems` entry, not a triumph.
+7. **Budget fidelity before you spend it.** Before the full CV, time ONE fold
+   at target fidelity (or reuse the candidate's own timing notes); scale
+   folds/epochs so predicted total CV time is at most 60% of your time box.
+8. **Verify the artifact end to end.** After fold scoring, run the kernel once
+   as `SMOKE=1 python kernel.py` in a scratch dir and validate the submission
+   file it writes (columns, rows, value range). A candidate with a verified
+   score but an unverified submission artifact is not verified.
+
+## Long commands
+
+For any command over ~90s: run it with Bash `run_in_background` (or
+`nohup ... > log 2>&1 &`), use `python -u` for unbuffered output, never pipe
+through `tee` for progress (it block-buffers), and do other useful work between
+polls (poll at most every 60s).
 
 ## You must NOT
 

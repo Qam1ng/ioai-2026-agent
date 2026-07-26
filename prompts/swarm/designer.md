@@ -57,6 +57,12 @@ kernel**, training included, on the `accelerator` you name. GPU quota is 30h/wee
 shared by all three problems of the day, so a plan that needs 4 GPU-hours must
 justify it against two plans that need 20 minutes each.
 
+Choose the accelerator for KAGGLE hardware, not the local machine. Deep nets
+get `t4` or `p100` (the 30h/week quota exists to be spent); `cpu` only for
+methods that provably fit the runtime target on CPU (trees, linear, priors).
+Declaring `cpu` for a deep net does not make it cheaper — it makes it a
+~150-minute kernel while free GPU quota sits unused.
+
 ## Output
 
 End with exactly one fenced json block containing all K plans.

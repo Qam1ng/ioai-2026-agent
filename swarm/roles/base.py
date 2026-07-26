@@ -140,6 +140,23 @@ class Role:
         self.sandbox = Path(sandbox) if sandbox else bb.ws
         self.session_id = ""
         self._pending_warning = ""
+        # Per-role timeouts come from the config, not a class constant. The
+        # rehearsal shipped coder_timeout_s=900 in the yaml and it never took
+        # effect because the class default shadowed it.
+        _t = cfg.parallel
+        self.timeout_s = float(
+            {
+                "coder": _t.coder_timeout_s,
+                "tuner": _t.tuner_timeout_s,
+                "aggregator": _t.tuner_timeout_s,
+                "verifier": _t.tuner_timeout_s,
+            }.get(name, self.timeout_s)
+        )
+        # Full-content trace for the audit trail. The Jury requires timestamped
+        # model inputs and outputs; token counts alone reconstruct nothing.
+        trace_dir = bb.ws / "roles"
+        trace_dir.mkdir(exist_ok=True)
+        self._trace_path = trace_dir / f"{name}-{int(time.time() * 1000)}.jsonl"
 
     # ------------------------------------------------------------ plumbing
     @staticmethod
@@ -165,6 +182,15 @@ class Role:
             return fn(args, self.ctx)
         except Exception as exc:  # tool errors are information, not crashes
             return f"[tool error] {type(exc).__name__}: {exc}"
+
+    def _trace(self, entry: dict) -> None:
+        """Append one full-content record to this role's audit file. Never raises."""
+        try:
+            entry["t"] = time.time()
+            with open(self._trace_path, "a") as fh:
+                fh.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+        except Exception:
+            pass
 
     def _emit(self, kind: str, **fields: Any) -> None:
         self.bb.event(kind, role=self.name, **fields)
@@ -215,8 +241,11 @@ class Role:
         system = self.system_prompt()
         schemas = self._schemas()
         history: list = []
-        self.provider.append_user(history, self.opening_message(instructions, context))
+        opening = self.opening_message(instructions, context)
+        self.provider.append_user(history, opening)
         self._emit("role_start", instruction=instructions[:400])
+        self._trace({"e": "system", "text": system})
+        self._trace({"e": "user", "text": opening})
 
         last_text = ""
         for step_i in range(self.max_steps):
@@ -242,6 +271,16 @@ class Role:
             if step.text:
                 last_text = step.text
             self.provider.append_assistant(history, step)
+            self._trace(
+                {
+                    "e": "assistant",
+                    "text": step.text,
+                    "tool_calls": [
+                        {"name": c.name, "input": c.input} for c in step.tool_calls
+                    ],
+                    "usage": step.usage,
+                }
+            )
             self._emit(
                 "llm",
                 step=step_i,
@@ -286,6 +325,7 @@ class Role:
             for call in step.tool_calls:
                 out = self._call_tool(call.name, call.input)
                 self._emit("tool", tool=call.name, chars=len(out or ""))
+                self._trace({"e": "tool_result", "tool": call.name, "output": out})
                 results.append(
                     ToolResult(call.id, out, is_error=str(out).startswith("[tool error]"))
                 )
@@ -338,6 +378,17 @@ class Role:
         self.budget.note_llm(res.usage, res.cost_usd)
         if res.session_id:
             self.session_id = res.session_id
+        self._trace(
+            {
+                "e": "claude_code_run",
+                "session_id": res.session_id,
+                "cwd": str(self.sandbox),
+                "transcript_hint": "~/.claude/projects/<cwd-slug>/<session_id>.jsonl",
+                "turns": res.num_turns,
+                "result_text": res.text,
+                "error": res.error,
+            }
+        )
         self._emit(
             "claude_code",
             turns=res.num_turns,

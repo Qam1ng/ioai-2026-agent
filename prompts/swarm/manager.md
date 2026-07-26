@@ -56,6 +56,14 @@ Route on the **kind** of feedback in the snapshot, not on its tone:
 `retire` is a normal, frequent action, not a failure. A candidate held open
 costs GPU quota and Manager attention that a live candidate needs.
 
+`wait` now blocks until the world changes (or ~60s). Choosing `wait` twice in a
+row is fine while candidates are running; it costs little.
+
+Verification is automatic: candidates are verified when they become ready — you
+do not need to route `verify` unless you want a RE-verification after a fix.
+Milestone submissions fire automatically when a verified score clears the
+significance gate.
+
 ## Hard rules you may not violate
 
 1. **Never delay the floor submission.** Until a valid submission exists, the
@@ -75,6 +83,13 @@ costs GPU quota and Manager attention that a live candidate needs.
    ranking of two candidates inside the noise band carries no information.
 4. **A candidate the Verifier flagged is not promotable** until the flagged
    problem is answered, no matter how good its number looks.
+5. **An action that has failed twice with the same observation is a dead
+   path:** do not choose it again until the snapshot shows the cause changed.
+   Route around it or wait.
+6. **After the freeze gate, the ONLY useful actions in priority order:**
+   (1) any verified-but-unsubmitted candidate -> make it submittable;
+   (2) two or more scored candidates -> `aggregate`; (3) `report`. Anything
+   else after freeze is wasted clock.
 
 ## Output
 
