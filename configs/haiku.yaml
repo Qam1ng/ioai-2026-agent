@@ -14,6 +14,18 @@ default_model:
   model: claude-haiku-4-5-20251001
   max_tokens: 8000
 
+models:
+  # Exercise the Claude Code path for the two roles whose work is code:
+  # the harness builder and the kernel writer.
+  verifier:
+    backend: claude_code
+    model: claude-haiku-4-5-20251001
+    max_tokens: 8000
+  coder:
+    backend: claude_code
+    model: claude-haiku-4-5-20251001
+    max_tokens: 8000
+
 gates:
   floor_submit_min: 8
   freeze_min: 24

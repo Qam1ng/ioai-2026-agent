@@ -26,10 +26,13 @@ models:
     model: gemini-3.1-pro
     api_key_env: OPENAI_API_KEY
     max_tokens: 16000
+  # Verifier builds the eval/ harness -- metric replication, grouped k-fold,
+  # format validation. That is code work, so it gets the full coding agent.
+  # The NUMBERS never come from the model: the pod re-runs eval/run_eval.py
+  # as a deterministic subprocess for every verification after the first.
   verifier:
-    backend: openai
-    model: gemini-3.1-pro
-    api_key_env: OPENAI_API_KEY
+    backend: claude_code
+    model: ""
     max_tokens: 32000
   compliance:
     backend: openai

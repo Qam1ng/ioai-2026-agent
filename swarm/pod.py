@@ -350,40 +350,30 @@ class TaskPod:
                 cid = self.launch_candidate(fresh[0], action.instructions)
                 return f"launched candidate {cid} on plan {fresh[0].plan_id}"
 
-            if a in ("tune", "verify"):
+            if a == "tune":
                 cid = action.target
                 cand = self.bb.get_candidate(cid) if cid else None
                 if cand is None:
                     return f"unknown candidate: {cid!r}"
-                role = self._role(
-                    "tuner" if a == "tune" else "verifier",
-                    **({"sandbox": self.bb.candidate_dir(cid)} if a == "tune" else {}),
-                )
+                role = self._role("tuner", sandbox=self.bb.candidate_dir(cid))
                 res = role.run(
-                    action.instructions or f"{a} candidate {cid}",
+                    action.instructions or f"tune candidate {cid}",
                     context={"candidate": cand.to_dict()},
                 )
-                if a == "verify" and res.report:
-                    cand.local_score = res.report.get("local_score", cand.local_score)
-                    cand.local_std = res.report.get("local_std", cand.local_std)
-                    cand.folds = res.report.get("folds", cand.folds) or cand.folds
-                    cand.status = "ready"
-                    self.bb.put_candidate(cand)
-                    self.bb.put_calibration(fit_calibration(self.bb))
                 self.bb.add_experiment(
                     Experiment(
                         candidate_id=cid,
-                        role=a,
+                        role="tune",
                         description=action.instructions[:200],
-                        local_score=cand.local_score,
-                        local_std=cand.local_std,
-                        folds=cand.folds,
                         runtime_s=res.elapsed_s,
                         accepted=res.ok,
                         reject_reason=res.error,
                     )
                 )
-                return f"{a} on {cid}: ok={res.ok} score={cand.local_score}"
+                return f"tune on {cid}: ok={res.ok}"
+
+            if a == "verify":
+                return self._do_verify(action)
 
             if a == "probe":
                 return self._do_probe(action)
@@ -495,6 +485,120 @@ class TaskPod:
             cid = self.launch_candidate(fresh[0])
             return f"launched candidate {cid} without waiting for the manager"
         return "no forced action available; waiting on running candidates"
+
+    # -------------------------------------------------------- verification
+    def _run_eval_harness(self, candidate_id: str, timeout_s: float | None = None) -> dict | None:
+        """Score a candidate with the deterministic harness, if one exists.
+
+        An LLM estimates; a harness measures. Once the Verifier has built
+        ``eval/run_eval.py``, every re-verification is a subprocess — free,
+        reproducible, same folds every time — which is what makes the
+        significance gate's comparisons between candidates meaningful at all.
+        Returns the parsed result dict, or None when no harness exists yet.
+        """
+        import subprocess
+        import sys as _sys
+
+        script = self.bb.ws / "eval" / "run_eval.py"
+        if not script.exists():
+            return None
+        try:
+            proc = subprocess.run(
+                [_sys.executable, str(script), "--candidate", f"candidates/{candidate_id}"],
+                cwd=str(self.bb.ws),
+                capture_output=True,
+                text=True,
+                timeout=timeout_s or self.cfg.parallel.tuner_timeout_s,
+            )
+        except subprocess.TimeoutExpired:
+            return {"problems": [f"eval harness timed out"], "error": "timeout"}
+        import json as _json
+
+        for line in reversed((proc.stdout or "").strip().splitlines()):
+            line = line.strip()
+            if line.startswith("{"):
+                try:
+                    out = _json.loads(line)
+                    if proc.returncode != 0:
+                        out.setdefault("problems", []).append(
+                            f"harness exit={proc.returncode}: {(proc.stderr or '')[-300:]}"
+                        )
+                    return out
+                except _json.JSONDecodeError:
+                    break
+        return {
+            "problems": [f"harness produced no JSON (exit={proc.returncode})"],
+            "error": (proc.stderr or proc.stdout or "")[-400:],
+        }
+
+    def _do_verify(self, action: ManagerAction) -> str:
+        """Verify = measure with the harness; build the harness if it is missing.
+
+        The Verifier LLM's product is the harness (and the red-team findings),
+        never the number itself. The number always comes from the subprocess.
+        """
+        cid = action.target
+        cand = self.bb.get_candidate(cid) if cid else None
+        if cand is None:
+            return f"unknown candidate: {cid!r}"
+
+        result = self._run_eval_harness(cid)
+        built = False
+        role_error = ""
+        elapsed = 0.0
+        if result is None:
+            role = self._role("verifier")
+            res = role.run(
+                (action.instructions + "\n\n" if action.instructions else "")
+                + f"No eval/ harness exists yet. Build it (metric.py with passing self-test, "
+                f"run_eval.py honouring the contract), then verify candidate {cid} by "
+                f"running it. Also report your red-team findings.",
+                context={
+                    "candidate": cand.to_dict(),
+                    "task_card": (self.bb.get_task_card() or TaskCard(self.cfg.slug)).to_dict(),
+                },
+            )
+            built, role_error, elapsed = res.ok, res.error, res.elapsed_s
+            # Trust the subprocess over the transcript: re-run the harness the
+            # Verifier just built and take THOSE numbers.
+            result = self._run_eval_harness(cid)
+            if result is None and res.report:
+                result = res.report  # harness missing; report is better than nothing
+                result.setdefault("problems", []).append(
+                    "verifier emitted numbers but no eval/run_eval.py harness"
+                )
+
+        if not result:
+            return f"verify on {cid}: no harness and no report ({role_error or 'unknown'})"
+
+        score = result.get("local_score")
+        if score is not None:
+            cand.local_score = float(score)
+            cand.local_std = float(result.get("local_std") or 0.0)
+            cand.folds = list(result.get("folds") or [])
+            cand.status = "ready"
+            self.bb.put_candidate(cand)
+            self.bb.put_calibration(fit_calibration(self.bb))
+        self.bb.add_experiment(
+            Experiment(
+                candidate_id=cid,
+                role="verify",
+                description=("harness" + ("+build" if built else ""))
+                if score is not None
+                else "verify failed",
+                local_score=cand.local_score,
+                local_std=cand.local_std,
+                folds=cand.folds,
+                runtime_s=elapsed,
+                accepted=score is not None,
+                reject_reason="; ".join(map(str, result.get("problems") or []))[:400],
+            )
+        )
+        problems = result.get("problems") or []
+        return (
+            f"verify on {cid}: score={cand.local_score} std={cand.local_std} "
+            f"problems={problems[:3]}"
+        )
 
     def _do_probe(self, action: ManagerAction) -> str:
         role = self._role("prober")
