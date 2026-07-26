@@ -121,6 +121,15 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     checks.append(("claude CLI", shutil.which("claude") is not None, shutil.which("claude") or "-"))
     checks.append(("kaggle CLI", shutil.which("kaggle") is not None, shutil.which("kaggle") or "-"))
 
+    # The expensive check, and the one that actually bites: a spawned `claude -p`
+    # does not inherit an interactive login, so an unauthenticated CLI turns
+    # every coding role into a silent no-op.
+    if not args.quick:
+        from swarm.runners import check_auth
+
+        ok, detail = check_auth()
+        checks.append(("claude CLI authenticated", ok, detail))
+
     kag = Path.home() / ".kaggle"
     checks.append(
         (
@@ -186,6 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.set_defaults(func=cmd_status)
 
     doc = sub.add_parser("doctor", help="pre-flight environment checks")
+    doc.add_argument("--quick", action="store_true", help="skip the live model-auth probe")
     doc.set_defaults(func=cmd_doctor)
 
     return p

@@ -33,6 +33,48 @@ def claude_available() -> bool:
     return shutil.which("claude") is not None
 
 
+#: Substrings the CLI returns when it has a binary but no credentials. A
+#: spawned `claude -p` does not inherit an interactive session's login, so this
+#: is the failure a run hits first if nobody checked beforehand.
+_AUTH_MARKERS = ("not logged in", "please run /login", "invalid api key", "authentication_error")
+
+
+def is_auth_failure(text: str) -> bool:
+    low = (text or "").lower()
+    return any(m in low for m in _AUTH_MARKERS)
+
+
+def check_auth(timeout_s: float = 60.0) -> tuple[bool, str]:
+    """Verify the CLI can actually answer. Run this before a competition window.
+
+    Returns ``(ok, detail)``. Silent degradation here is expensive: every
+    coding role would return empty and the pod would fall back to the trivial
+    kernel while looking, from the outside, like it was working.
+    """
+    if not claude_available():
+        return False, "`claude` CLI not found on PATH"
+    try:
+        proc = subprocess.run(
+            ["claude", "-p", "reply with the single word: ok", "--output-format", "json"],
+            capture_output=True,
+            text=True,
+            timeout=timeout_s,
+            stdin=subprocess.DEVNULL,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"claude CLI did not respond within {timeout_s:.0f}s"
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if is_auth_failure(out):
+        return False, "claude CLI is not authenticated (run `claude` and /login, or set ANTHROPIC_API_KEY)"
+    try:
+        payload = json.loads(proc.stdout or "{}")
+    except json.JSONDecodeError:
+        return proc.returncode == 0, out[-300:]
+    if payload.get("is_error"):
+        return False, str(payload.get("result", ""))[-300:]
+    return True, str(payload.get("result", ""))[:120]
+
+
 @dataclass
 class ClaudeCodeResult:
     ok: bool
@@ -131,6 +173,17 @@ def run_claude_code(
 
     usage = payload.get("usage") or {}
     is_error = bool(payload.get("is_error")) or proc.returncode != 0
+    if is_auth_failure(payload.get("result", "")):
+        return ClaudeCodeResult(
+            ok=False,
+            text=payload.get("result", ""),
+            duration_s=elapsed,
+            error=(
+                "claude CLI is not authenticated. A spawned `claude -p` does not inherit an "
+                "interactive login. Run `claude` and /login, or export ANTHROPIC_API_KEY."
+            ),
+            raw=payload,
+        )
     return ClaudeCodeResult(
         ok=not is_error,
         text=payload.get("result", "") or "",

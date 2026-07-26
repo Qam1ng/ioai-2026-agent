@@ -158,26 +158,44 @@ class TaskPod:
             self.bb.event("gate_error", gate="floor", error=str(exc))
 
     def _fallback_kernel(self) -> str:
-        """A kernel that copies the sample submission unchanged.
+        """The dumbest entry that can still score: echo whatever sample exists.
 
-        Deliberately the dumbest possible valid entry: it proves the submission
-        path works and guarantees a non-zero row in the ledger.
+        Not every task ships a CSV sample -- practice task 2 expects a
+        ``predictions.zip`` -- so this searches for any sample-shaped artifact
+        and reproduces it under its own name. When a task has no sample at all
+        there is nothing generic left to guess, and the kernel says so loudly
+        rather than writing a file the grader will silently reject.
+
+        This is a last resort. The real floor comes from the first plan, which
+        the Designer is instructed to make a minimal valid submission.
         """
         return (
-            "import os, shutil, csv\n"
-            "src = None\n"
-            "for root, dirs, files in os.walk('/kaggle/input'):\n"
+            "import os, shutil\n"
+            "\n"
+            "CANDIDATES = ('sample_submission', 'submission', 'sample_predictions', 'predictions')\n"
+            "found = []\n"
+            "for root, _dirs, files in os.walk('/kaggle/input'):\n"
             "    for f in files:\n"
-            "        if f.lower() in ('submission.csv', 'sample_submission.csv'):\n"
-            "            src = os.path.join(root, f)\n"
-            "            break\n"
-            "    if src:\n"
-            "        break\n"
+            "        stem, ext = os.path.splitext(f)\n"
+            "        if stem.lower() in CANDIDATES and ext.lower() in ('.csv', '.zip', '.json'):\n"
+            "            found.append(os.path.join(root, f))\n"
             "os.makedirs('/kaggle/working', exist_ok=True)\n"
-            "if src:\n"
-            "    shutil.copyfile(src, '/kaggle/working/submission.csv')\n"
-            "else:\n"
-            "    raise SystemExit('no sample submission found under /kaggle/input')\n"
+            "if not found:\n"
+            "    raise SystemExit(\n"
+            "        'FLOOR KERNEL: no sample submission under /kaggle/input; this task needs a\\n'\n"
+            "        'task-specific floor. Listing the input tree so the next attempt can see it:\\n'\n"
+            "        + '\\n'.join(\n"
+            "            os.path.join(r, f)\n"
+            "            for r, _d, fs in os.walk('/kaggle/input')\n"
+            "            for f in fs\n"
+            "        )[:4000]\n"
+            "    )\n"
+            "# Prefer a CSV when several samples exist: it is the commonest grader input.\n"
+            "found.sort(key=lambda p: (not p.lower().endswith('.csv'), len(p)))\n"
+            "src = found[0]\n"
+            "dst = os.path.join('/kaggle/working', os.path.basename(src))\n"
+            "shutil.copyfile(src, dst)\n"
+            "print('floor kernel copied', src, '->', dst)\n"
         )
 
     # -------------------------------------------------------- bootstrap
@@ -205,10 +223,15 @@ class TaskPod:
             return plans
         role = self._role("designer")
         res = role.run(
-            f"Propose {k} candidate approaches. They must span genuinely different method "
-            "families -- not {k} variants of one idea. For each give architecture, data "
-            "strategy, loss, training config, validation strategy, expected runtime and "
-            "the accelerator it needs. Write no code.",
+            f"Propose {k} candidate approaches.\n\n"
+            "PLAN 1 IS MANDATORY AND FIXED: the fastest possible *valid* submission for this "
+            "task -- a constant or trivial prediction in the exact required output format, "
+            "CPU-only, no training. Two of the three practice competitions ship no sample "
+            "submission file, so a generic 'copy the sample' fallback cannot save us; the "
+            "floor has to be built from the task's own output spec. Give it family 'floor'.\n\n"
+            f"Plans 2..{k} must span genuinely different method families -- not variants of "
+            "one idea. For each give architecture, data strategy, loss, training config, "
+            "validation strategy, expected runtime and the accelerator it needs. Write no code.",
             context={"task_card": (self.bb.get_task_card() or TaskCard(self.cfg.slug)).to_dict()},
         )
         new = role.parse(res) if hasattr(role, "parse") else []
@@ -413,8 +436,34 @@ class TaskPod:
         return f"final submission: {rec.sub_id}"
 
     # -------------------------------------------------------------- run
+    def preflight(self) -> str | None:
+        """Fail fast on a dead brain. Returns a reason, or None when healthy.
+
+        Without this the pod burns its whole window: every role returns empty,
+        the floor gate fires, and the run *looks* successful from the outside
+        while having produced nothing but the trivial fallback kernel.
+        """
+        backends = {self.cfg.model_for(r).backend for r in ("profiler", "manager", "coder")}
+        if "claude_code" in backends:
+            from .runners import check_auth
+
+            ok, detail = check_auth()
+            if not ok:
+                return f"claude_code backend unusable: {detail}"
+        return None
+
     def run(self) -> PodResult:
         self.bb.event("pod_start", slug=self.cfg.slug, config=self.cfg.to_dict())
+        problem = self.preflight()
+        if problem:
+            self.bb.event("preflight_failed", reason=problem)
+            self._errors.append(problem)
+            return PodResult(
+                slug=self.cfg.slug,
+                ok=False,
+                stop_reason=f"preflight failed: {problem}",
+                errors=self._errors,
+            )
         try:
             self.ensure_task_card()
             self.ensure_plans(min(self.cfg.parallel.max_candidates + 1, 6))
