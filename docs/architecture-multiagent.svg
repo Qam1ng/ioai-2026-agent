@@ -1,0 +1,133 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 900" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2d3436"/>
+    </marker>
+  </defs>
+  <rect width="1280" height="900" fill="#ffffff"/>
+  <text x="640" y="32" text-anchor="middle" font-size="21" font-weight="700" fill="#2d3436">multiagent-sdk — as-built architecture (branch: multiagent-sdk, kernel: Claude Agent SDK, model: Fable 5)</text>
+
+  <!-- launcher -->
+  <rect x="40" y="56" width="400" height="66" rx="10" fill="#ffeaa7" stroke="#e17055" stroke-width="2"/>
+  <text x="240" y="79" text-anchor="middle" font-size="14" font-weight="700">HUMAN launch (only action)</text>
+  <text x="240" y="98" text-anchor="middle" font-size="11.5" font-family="monospace">python -m magent.main --slug &lt;comp&gt; [--model …]</text>
+  <text x="240" y="113" text-anchor="middle" font-size="10.5" fill="#636e72">no --brief needed: agent fetches the task itself (kaggle_overview)</text>
+
+  <!-- round loop -->
+  <rect x="480" y="56" width="760" height="66" rx="10" fill="#f1f2f6" stroke="#636e72" stroke-width="2"/>
+  <text x="860" y="76" text-anchor="middle" font-size="13.5" font-weight="700">HARNESS ROUND LOOP (ours, deterministic — LLM cannot bypass)</text>
+  <text x="860" y="94" text-anchor="middle" font-size="11">start/continue prompts (official IOAI wording) + [budget] line each round · pacing (short round → sleep 30-120s)</text>
+  <text x="860" y="110" text-anchor="middle" font-size="11">predictive cost gate (next-round estimate would bust cap → forced wrap-up) · stop = REPORT.md + submitted, or budget out</text>
+  <path d="M440,89 H480" stroke="#2d3436" stroke-width="2" marker-end="url(#ar)"/>
+
+  <!-- manager -->
+  <rect x="380" y="150" width="520" height="120" rx="12" fill="#efe7ff" stroke="#6c5ce7" stroke-width="2.5"/>
+  <text x="640" y="175" text-anchor="middle" font-size="16" font-weight="700">MANAGER — main SDK session (Fable 5)</text>
+  <text x="640" y="196" text-anchor="middle" font-size="11.5">never writes ML code; routes work, allocates budget, kills/extends repos</text>
+  <text x="640" y="213" text-anchor="middle" font-size="11.5">decisions MUST cite the Verifier's latest report (verify-then-decide)</text>
+  <text x="640" y="230" text-anchor="middle" font-size="11.5">parallel fan-out = multiple Task calls in ONE message (no background agents)</text>
+  <text x="640" y="252" text-anchor="middle" font-size="11" fill="#636e72">compact context: reads subagent summaries + on-disk artifacts only</text>
+  <path d="M640,122 V150" stroke="#2d3436" stroke-width="2" marker-end="url(#ar)"/>
+
+  <!-- hooks -->
+  <rect x="940" y="150" width="300" height="120" rx="10" fill="#ffe3e3" stroke="#d63031" stroke-width="2"/>
+  <text x="1090" y="173" text-anchor="middle" font-size="13.5" font-weight="700">SDK HOOKS (hard rails)</text>
+  <text x="1090" y="194" text-anchor="middle" font-size="11.5">PreToolUse: kaggle_submit gate</text>
+  <text x="1090" y="210" text-anchor="middle" font-size="11.5">(submission budget — deny when spent)</text>
+  <text x="1090" y="230" text-anchor="middle" font-size="11.5">PostToolUse: every tool → trace.jsonl</text>
+  <text x="1090" y="250" text-anchor="middle" font-size="11.5">cost/tokens per round → Budget (recorded)</text>
+  <path d="M900,210 H940" stroke="#d63031" stroke-width="2" marker-end="url(#ar)"/>
+
+  <!-- knowledge -->
+  <rect x="40" y="150" width="300" height="120" rx="10" fill="#ffe3d8" stroke="#e17055" stroke-width="2"/>
+  <text x="190" y="173" text-anchor="middle" font-size="13.5" font-weight="700">KNOWLEDGE (persistent)</text>
+  <text x="190" y="194" text-anchor="middle" font-size="11.5">memory/lessons — recalled at setup,</text>
+  <text x="190" y="210" text-anchor="middle" font-size="11.5">new lesson distilled per run (reporter)</text>
+  <text x="190" y="230" text-anchor="middle" font-size="11.5">skills/ — playbooks (kaggle-submission…)</text>
+  <text x="190" y="250" text-anchor="middle" font-size="10.5" fill="#636e72">boundary: task-solving knowledge only</text>
+  <path d="M340,210 H380" stroke="#2d3436" stroke-width="2" marker-end="url(#ar)" marker-start="url(#ar)"/>
+
+  <!-- subagents row -->
+  <text x="640" y="308" text-anchor="middle" font-size="14" font-weight="700" fill="#2d3436">SUBAGENTS — own context window each (Task tool; parallel across repos)</text>
+  <g font-size="12" font-weight="700" text-anchor="middle">
+    <rect x="40"  y="322" width="150" height="86" rx="9" fill="#e8f6ff" stroke="#0984e3" stroke-width="2"/>
+    <text x="115" y="344">Setup</text>
+    <text x="115" y="362" font-size="10" font-weight="400" fill="#636e72">kaggle_overview FIRST</text>
+    <text x="115" y="376" font-size="10" font-weight="400" fill="#636e72">data / EDA / TASK_CARD</text>
+    <text x="115" y="390" font-size="10" font-weight="400" fill="#636e72">repo skeletons</text>
+    <rect x="210" y="322" width="150" height="86" rx="9" fill="#f3ecff" stroke="#6c5ce7" stroke-width="2"/>
+    <text x="285" y="344">Designer ×repo</text>
+    <text x="285" y="362" font-size="10" font-weight="400" fill="#636e72">plan.md only, NO code</text>
+    <text x="285" y="376" font-size="10" font-weight="400" fill="#636e72">DIVERSE across repos</text>
+    <text x="285" y="390" font-size="10" font-weight="400" fill="#636e72">revises on diagnosis</text>
+    <rect x="380" y="322" width="150" height="86" rx="9" fill="#eef7ee" stroke="#00b894" stroke-width="2"/>
+    <text x="455" y="344">Coder ×repo</text>
+    <text x="455" y="362" font-size="10" font-weight="400" fill="#636e72">train/config/submit.py</text>
+    <text x="455" y="376" font-size="10" font-weight="400" fill="#636e72">sanity-check only</text>
+    <text x="455" y="390" font-size="10" font-weight="400" fill="#636e72">shared folds mandatory</text>
+    <rect x="550" y="322" width="150" height="86" rx="9" fill="#fff6df" stroke="#fdcb6e" stroke-width="2"/>
+    <text x="625" y="344">Tuner ×repo</text>
+    <text x="625" y="362" font-size="10" font-weight="400" fill="#636e72">probe→extend training</text>
+    <text x="625" y="376" font-size="10" font-weight="400" fill="#636e72">async kernel watch</text>
+    <text x="625" y="390" font-size="10" font-weight="400" fill="#636e72">GPU quota / accel choice</text>
+    <rect x="720" y="322" width="150" height="86" rx="9" fill="#eaf3ff" stroke="#0984e3" stroke-width="2.5"/>
+    <text x="795" y="344">Verifier ★ours</text>
+    <text x="795" y="362" font-size="10" font-weight="400" fill="#636e72">shared k-fold harness</text>
+    <text x="795" y="376" font-size="10" font-weight="400" fill="#636e72">metric self-tested</text>
+    <text x="795" y="390" font-size="10" font-weight="400" fill="#636e72">reports: EXTEND/KILL/SUBMIT</text>
+    <rect x="890" y="322" width="150" height="86" rx="9" fill="#d6f5d6" stroke="#00b894" stroke-width="2"/>
+    <text x="965" y="344">Aggregator</text>
+    <text x="965" y="362" font-size="10" font-weight="400" fill="#636e72">best single or in-kernel</text>
+    <text x="965" y="376" font-size="10" font-weight="400" fill="#636e72">ensemble (OOF weights =</text>
+    <text x="965" y="390" font-size="10" font-weight="400" fill="#636e72">config; no checkpoints)</text>
+    <rect x="1060" y="322" width="150" height="86" rx="9" fill="#f1f2f6" stroke="#636e72" stroke-width="2"/>
+    <text x="1135" y="344">Reporter</text>
+    <text x="1135" y="362" font-size="10" font-weight="400" fill="#636e72">REPORT.md (mandatory)</text>
+    <text x="1135" y="376" font-size="10" font-weight="400" fill="#636e72">+ distills one lesson</text>
+    <text x="1135" y="390" font-size="10" font-weight="400" fill="#636e72">to memory</text>
+  </g>
+  <path d="M640,270 V322" stroke="#2d3436" stroke-width="2" marker-end="url(#ar)"/>
+
+  <!-- workspace -->
+  <rect x="40" y="440" width="800" height="150" rx="10" fill="#fbfbfb" stroke="#b2bec3" stroke-width="2"/>
+  <text x="440" y="463" text-anchor="middle" font-size="13.5" font-weight="700">WORKSPACE (per competition) — artifacts are the interface between agents</text>
+  <g font-size="11.5" font-family="monospace">
+    <text x="70" y="488">repo_1/  plan.md  train.py  config.py  submit.py  result.md   ← trajectory 1 (e.g. partial fine-tune)</text>
+    <text x="70" y="508">repo_2/  plan.md  train.py  config.py  submit.py  result.md   ← trajectory 2 (e.g. frozen-feat + blend)</text>
+    <text x="70" y="528">validation/  folds.json  harness.py  README.md               ← Verifier-owned, SHARED by all repos</text>
+    <text x="70" y="548">verification/report_k.md · TASK_CARD.md · REPORT.md · trace.jsonl</text>
+  </g>
+  <text x="440" y="576" text-anchor="middle" font-size="10.5" fill="#636e72">(server runs: input/ symlinked to /data/qyan/ioai/&lt;slug&gt;; GPU pinned to idle cards via CUDA_VISIBLE_DEVICES)</text>
+
+  <!-- kaggle -->
+  <rect x="880" y="440" width="360" height="150" rx="10" fill="#eaf6ff" stroke="#0984e3" stroke-width="2.5"/>
+  <text x="1060" y="463" text-anchor="middle" font-size="13.5" font-weight="700" fill="#0984e3">KAGGLE</text>
+  <text x="1060" y="486" text-anchor="middle" font-size="11.5">kaggle_overview: official task pages via API</text>
+  <text x="1060" y="503" text-anchor="middle" font-size="11.5">(works for private comps — no browser needed)</text>
+  <text x="1060" y="524" text-anchor="middle" font-size="11.5">data download · kernel push/status/log</text>
+  <text x="1060" y="543" text-anchor="middle" font-size="11.5">submit: kernel output (code comp) or CSV</text>
+  <text x="1060" y="562" text-anchor="middle" font-size="11.5">leaderboard score → Verifier calibration</text>
+  <path d="M840,515 H880" stroke="#0984e3" stroke-width="2" marker-end="url(#ar)" marker-start="url(#ar)"/>
+
+  <!-- what changed vs old -->
+  <rect x="40" y="622" width="1200" height="180" rx="10" fill="#fffbe6" stroke="#fdcb6e" stroke-width="2"/>
+  <text x="640" y="646" text-anchor="middle" font-size="14" font-weight="700">What actually changed vs the old architecture (master, LB 0.78392) — candidate explanations for 0.80732</text>
+  <g font-size="11.8">
+    <text x="70" y="672" font-weight="700">① Model: Opus 4.8 → Fable 5</text>
+    <text x="70" y="689">stronger long-horizon reasoning — CONFOUNDED with everything below; isolated by ablation C (--model claude-opus-4-8)</text>
+    <text x="70" y="712" font-weight="700">② Parallel diverse trajectories (2 repos)</text>
+    <text x="70" y="729">old system explored ONE path; now fine-tune AND frozen-feature families both tried, best wins → directly produced both record submissions</text>
+    <text x="70" y="752" font-weight="700">③ Verifier + shared folds + verify-then-decide</text>
+    <text x="70" y="769">old failure was noise-chasing on a tiny holdout; now decisions cite k-fold mean±std on identical splits</text>
+    <text x="660" y="672" font-weight="700">④ Role isolation (SDK subagents)</text>
+    <text x="660" y="689">each specialist gets a clean context; Manager stays compact — deeper work per role than one rolling conversation</text>
+    <text x="660" y="712" font-weight="700">⑤ Aggregation (OOF-weighted blend as config)</text>
+    <text x="660" y="729">0.80732 came from a 0.3/0.7 linear/mlp blend — the old system never blended at all</text>
+    <text x="660" y="752" font-weight="700">⑥ Better task grounding</text>
+    <text x="660" y="769">kaggle_overview gives the exact metric/pages; old runs relied on a hand-written brief</text>
+  </g>
+
+  <text x="640" y="836" text-anchor="middle" font-size="12" fill="#636e72">Attribution plan: A = master+Opus4.8 (0.78392, done) · B = multiagent+Fable5 (0.80732, done) · C = multiagent+Opus4.8 (pending) —</text>
+  <text x="640" y="854" text-anchor="middle" font-size="12" fill="#636e72">if C ≈ B the architecture drove the gain; if C ≈ A the model did. Caveat: single runs, Δ≈0.02 — treat one ablation as directional, not proof.</text>
+  <text x="640" y="884" text-anchor="middle" font-size="10.5" fill="#b2bec3">docs/architecture-multiagent.svg · runs traced in workspace/*/trace.jsonl · costs recorded per round</text>
+</svg>
