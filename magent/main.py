@@ -94,8 +94,15 @@ async def run(args) -> None:
 
     async with ClaudeSDKClient(options=options) as client:
         last_turns = 99
+        round_costs: list[float] = []
         for rnd in range(1, args.rounds + 1):
-            if budget.remaining() <= 0 or budget.cost_usd >= budget.max_cost_usd:
+            # Predictive gate: context snowballs, so a "cheap" round late in the
+            # run can cost as much as the biggest round so far. If the next
+            # round would likely blow the cap, go straight to wrap-up.
+            est_next = max(round_costs[-2:] or [0.0])
+            predicted_bust = budget.cost_usd + est_next > budget.max_cost_usd
+            if budget.remaining() <= 0 or budget.cost_usd >= budget.max_cost_usd \
+                    or predicted_bust:
                 prompt = ("BUDGET EXHAUSTED. Stop all new work NOW. If any valid "
                           "kernel is COMPLETE but unsubmitted, submit it; then "
                           "have reporter write REPORT.md immediately. "
@@ -127,6 +134,7 @@ async def run(args) -> None:
                     budget.tokens_in += u.get("input_tokens", 0)
                     budget.tokens_out += u.get("output_tokens", 0)
                     last_turns = msg.num_turns
+                    round_costs.append(cost)
                     trace.log("result", round=rnd, cost=cost,
                               turns=msg.num_turns, err=msg.is_error)
                     print(f"  [round {rnd} done] turns={msg.num_turns} "
