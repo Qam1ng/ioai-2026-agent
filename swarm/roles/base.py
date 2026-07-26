@@ -121,6 +121,7 @@ class Role:
         budget: PodBudget,
         ctx: Any = None,
         on_event: Callable[[str, dict], None] | None = None,
+        sandbox: Path | str | None = None,
     ):
         self.name = name
         self.cfg = cfg
@@ -136,6 +137,8 @@ class Role:
         self.ctx = ctx or toolreg.Ctx(
             workspace=bb.ws, slug=cfg.slug, budget=budget, trace=_TraceShim(bb)
         )
+        self.sandbox = Path(sandbox) if sandbox else bb.ws
+        self.session_id = ""
 
     # ------------------------------------------------------------ plumbing
     @staticmethod
@@ -195,6 +198,18 @@ class Role:
 
     # ---------------------------------------------------------------- run
     def run(self, instructions: str, context: dict | None = None) -> RoleResult:
+        """Execute the role. The backend is a configuration choice, not a class.
+
+        Any role can run either as a headless Claude Code process (a real
+        filesystem and edit-run-fix loop, best for writing code) or on the
+        plain API path (controlled, auditable context, best for judgement, and
+        able to use any model). Which one is decided per role in the config.
+        """
+        if self.spec.backend == "claude_code":
+            return self._run_claude_code(instructions, context)
+        return self._run_api(instructions, context)
+
+    def _run_api(self, instructions: str, context: dict | None = None) -> RoleResult:
         t0 = time.time()
         system = self.system_prompt()
         schemas = self._schemas()
@@ -267,28 +282,15 @@ class Role:
             "" if report else "step cap reached without a report",
         )
 
-
-class ClaudeCodeRole(Role):
-    """A role that runs as a real headless Claude Code process.
-
-    Used for the roles whose job is writing and debugging code. It reuses the
-    same prompt file and returns the same ``RoleResult``, so the pod treats it
-    identically to an API-path role; the difference is that the specialist gets
-    a real filesystem, a shell, and its own edit-run-fix loop inside a sandbox
-    directory.
-    """
-
-    #: Claude Code tool names (not registry tool names).
+    # ------------------------------------------------------- claude code
+    #: Claude Code tool names (not registry tool names). WebFetch/WebSearch are
+    #: withheld: the submitted kernel has no internet, so a solution that
+    #: quietly depends on a downloaded artifact cannot run on Kaggle.
     cc_tools: tuple[str, ...] = ("Read", "Write", "Edit", "Bash", "Glob", "Grep")
     max_turns: int = 60
     timeout_s: float = 1800.0
 
-    def __init__(self, *args, sandbox: Path | None = None, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.sandbox = Path(sandbox) if sandbox else self.bb.ws
-        self.session_id = ""
-
-    def run(self, instructions: str, context: dict | None = None) -> RoleResult:
+    def _run_claude_code(self, instructions: str, context: dict | None = None) -> RoleResult:
         from ..runners import ClaudeCodeUnavailable, run_claude_code
 
         t0 = time.time()
@@ -303,12 +305,13 @@ class ClaudeCodeRole(Role):
                 max_turns=self.max_turns,
                 timeout_s=self.timeout_s,
                 resume_session=self.session_id,
+                add_dirs=(self.bb.ws,) if self.sandbox != self.bb.ws else (),
             )
         except ClaudeCodeUnavailable as exc:
             return RoleResult(self.name, False, "", {}, 0, time.time() - t0, str(exc))
 
         # Claude Code bills itself; fold its cost into the pod budget so the
-        # efficiency figures we must publish stay complete.
+        # efficiency figures the rules require us to publish stay complete.
         self.budget.note_llm(res.usage, res.cost_usd)
         if res.session_id:
             self.session_id = res.session_id
@@ -330,6 +333,17 @@ class ClaudeCodeRole(Role):
             elapsed_s=res.duration_s,
             error=res.error or ("" if report else "no JSON report emitted"),
         )
+
+
+class ClaudeCodeRole(Role):
+    """A role pinned to the Claude Code backend regardless of configuration.
+
+    Rarely needed — the backend is normally chosen in ``configs/*.yaml`` — but
+    useful when a role only makes sense with a filesystem.
+    """
+
+    def run(self, instructions: str, context: dict | None = None) -> RoleResult:
+        return self._run_claude_code(instructions, context)
 
 
 class _TraceShim:
