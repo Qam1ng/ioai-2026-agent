@@ -158,18 +158,23 @@ def kaggle_kernel_log(args, ctx):
 
 
 def kaggle_submit(args, ctx):
-    """Submit a finished kernel's output file to the code competition (gated)."""
+    """Submit to the competition (gated). Two modes:
+    - code competition: kernel_ref+kernel_version (submits kernel output)
+    - normal competition: csv_path (uploads the CSV directly)"""
     if ctx.budget and not ctx.budget.can_submit():
         return "[BLOCKED by submit_gate: submission budget exhausted]"
-    ref = args.get("kernel_ref") or ctx.kernel_ref
-    ver = args.get("kernel_version")
     msg = args.get("message", "agent submission")
     from kaggle.api.kaggle_api_extended import KaggleApi
     api = KaggleApi(); api.authenticate()
     try:
-        r = api.competition_submit_code(args.get("file_name", "submission.csv"),
-                                        msg, ctx.slug, kernel=ref,
-                                        kernel_version=ver)
+        if args.get("csv_path"):
+            p = _safe(ctx, args["csv_path"])
+            r = api.competition_submit(str(p), msg, ctx.slug)
+        else:
+            ref = args.get("kernel_ref") or ctx.kernel_ref
+            r = api.competition_submit_code(
+                args.get("file_name", "submission.csv"), msg, ctx.slug,
+                kernel=ref, kernel_version=args.get("kernel_version"))
         if ctx.budget:
             ctx.budget.note_submit()
         return f"SUBMITTED: {r}"

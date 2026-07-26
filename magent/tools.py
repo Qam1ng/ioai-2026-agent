@@ -56,10 +56,11 @@ async def kaggle_kernel_log(args):
     return _run(R.kaggle_kernel_log, args)
 
 
-@tool("kaggle_submit", "Submit the finished kernel's output to the competition."
-      " Budget-gated by the harness.",
+@tool("kaggle_submit", "Submit to the competition (budget-gated). Code comp: "
+      "pass kernel_ref+kernel_version. Normal comp: pass csv_path to upload "
+      "the CSV directly.",
       {"kernel_ref": str, "kernel_version": int, "message": str,
-       "file_name": str})
+       "file_name": str, "csv_path": str})
 async def kaggle_submit(args):
     return _run(R.kaggle_submit, args)
 
