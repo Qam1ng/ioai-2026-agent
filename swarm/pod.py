@@ -452,6 +452,14 @@ class TaskPod:
             self._stall_count = 0
             return observation
 
+        # Waiting while candidates are genuinely running is patience, not a
+        # stall: the world *is* moving, just not in the snapshot yet. Observed:
+        # three legitimate waits during parallel coding tripped the breaker and
+        # spent the floor submission four minutes early.
+        if action.action == "wait" and self._running() > 0:
+            self._stall_count = 0
+            return observation
+
         self._stall_count = getattr(self, "_stall_count", 0) + 1
         if self._stall_count < self.STALL_LIMIT:
             return (
@@ -606,29 +614,59 @@ class TaskPod:
             f"problems={problems[:3]}"
         )
 
+    #: Prompt-schema kinds -> swarm.submit.probes registry names. The Prober
+    #: PLANS probes (kind + hypothesis + decision rule); the kernel code always
+    #: comes from the audited probe library, never from the model's transcript.
+    PROBE_KINDS = {
+        "constant": "constant_baseline",
+        "constant_baseline": "constant_baseline",
+        "granularity": "score_granularity",
+        "score_granularity": "score_granularity",
+        "split_shift": "split_shift",
+        "noise_floor": "noise_floor",
+        "calibration": "calibration",
+    }
+
     def _do_probe(self, action: ManagerAction) -> str:
+        from .submit.probes import get_probe
+
         role = self._role("prober")
         res = role.run(
-            action.instructions
-            or "Choose the single most informative probe given what we already know, and "
-            "give the CPU kernel code for it.",
+            action.instructions or "",
             context={"snapshot": self.bb.snapshot()},
         )
-        code = (res.report or {}).get("code", "")
-        if not code:
-            return "prober produced no probe code"
-        ok, why = self.broker.may_submit("probe")
-        if not ok:
-            return f"probe blocked: {why}"
-        rec = self.broker.submit(
-            code=code,
-            candidate_id="probe",
-            lane="probe",
-            purpose=(res.report or {}).get("hypothesis", "probe"),
-            accelerator="cpu",
-            local_score=None,
-        )
-        return f"probe submitted: {rec.sub_id}"
+        probes = role.parse_probes(res.report) if res.report else []
+        if not probes:
+            return "prober planned no probes (or its report failed to parse)"
+
+        submitted, skipped = [], []
+        for plan in probes[:2]:  # at most two per manager step; they queue on Kaggle
+            kind = self.PROBE_KINDS.get(str(plan.get("probe_kind", "")).lower())
+            if kind is None:
+                skipped.append(f"unknown kind {plan.get('probe_kind')!r}")
+                continue
+            ok, why = self.broker.may_submit("probe", accelerator="cpu")
+            if not ok:
+                skipped.append(f"blocked: {why}")
+                break
+            try:
+                code = get_probe(kind).build_code(self.bb.get_task_card())
+            except Exception as exc:
+                skipped.append(f"{kind}: build_code failed: {exc}")
+                continue
+            rec = self.broker.submit(
+                code=code,
+                candidate_id=f"probe-{kind}",
+                lane="probe",
+                purpose=f"{plan.get('hypothesis', kind)} | rule: {plan.get('decision_rule', '')}"[:200],
+                accelerator="cpu",
+                local_score=None,
+            )
+            submitted.append(f"{kind}->{rec.sub_id}")
+        out = f"probes submitted: {submitted}" if submitted else "no probe submitted"
+        if skipped:
+            out += f" (skipped: {skipped[:3]})"
+        return out
 
     def _do_aggregate(self, action: ManagerAction) -> str:
         role = self._role("aggregator", sandbox=self.bb.ws)
@@ -641,7 +679,8 @@ class TaskPod:
             "runtime budget. Do not retrain from scratch.",
             context={"candidates": ready, "calibration": self.bb.get_calibration().to_dict()},
         )
-        code = (res.report or {}).get("code", "")
+        report = res.report or {}
+        code = report.get("code", "")
         if not code:
             return "aggregator produced no code"
         ok, why = self.broker.may_submit("final")
@@ -651,9 +690,10 @@ class TaskPod:
             code=code,
             candidate_id="ensemble",
             lane="final",
-            purpose=(res.report or {}).get("strategy", "ensemble"),
-            accelerator=(res.report or {}).get("accelerator", "cpu"),
-            local_score=(res.report or {}).get("local_score"),
+            purpose=report.get("strategy", "ensemble"),
+            accelerator=report.get("accelerator", "cpu"),
+            # The schema calls the ensemble's out-of-fold score "oof_score".
+            local_score=report.get("oof_score", report.get("local_score")),
         )
         return f"final submission: {rec.sub_id}"
 
