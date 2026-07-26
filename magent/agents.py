@@ -18,7 +18,7 @@ AGENTS = {
         description="Prepare the task: download data, explore it, probe the "
                     "environment, write TASK_CARD.md, create repo_i skeletons.",
         prompt="""You are the Setup agent for a Kaggle competition team.
-Do: (1) read BRIEF.md if present (authoritative task statement, esp. the metric);
+Do: (1) call kaggle_overview FIRST (authoritative task pages: description/evaluation/data; also read BRIEF.md if present);
 (2) download data via kaggle_download (skips if present); (3) explore input/
 (files, schemas, sizes, label distributions, any provided model checkpoint);
 (4) recall lessons (memory_recall) and list skills (skill_list), load relevant

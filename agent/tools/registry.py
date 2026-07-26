@@ -187,6 +187,27 @@ def kaggle_submissions(args, ctx):
     return _kg(["competitions", "submissions", "-c", ctx.slug])
 
 
+def kaggle_overview(args, ctx):
+    """Fetch the competition's official pages (Description/Evaluation/Data...)
+    via the Kaggle API — works for private competitions too."""
+    from kaggle.api.kaggle_api_extended import KaggleApi
+    api = KaggleApi(); api.authenticate()
+    r = api.competition_list_pages(ctx.slug)
+    pages = getattr(r, "pages", r) or []
+    keep = {"description", "evaluation", "data-description", "abstract",
+            "overview", "timeline", "citation"}
+    out = []
+    for p in pages:
+        name = (getattr(p, "name", "") or "").lower()
+        content = getattr(p, "content", "") or ""
+        if name in keep and content.strip():
+            out.append(f"# [{name}]\n{content.strip()}")
+    if not out:  # fall back to everything except legal boilerplate
+        out = [f"# [{getattr(p,'name','?')}]\n{(getattr(p,'content','') or '')[:4000]}"
+               for p in pages if "rules" not in (getattr(p, "name", "") or "").lower()]
+    return _tail("\n\n".join(out), 16000)
+
+
 # --------------------------------------------------------------------------- #
 # memory & skills (repo-level, shared across runs)
 # --------------------------------------------------------------------------- #
@@ -268,6 +289,8 @@ TOOLS = [
         "message": {"type": "string"}, "file_name": {"type": "string"}}, [], kaggle_submit),
     _t("kaggle_submissions", "List this competition's submissions and scores.",
        {}, [], kaggle_submissions),
+    _t("kaggle_overview", "Fetch the competition's official task pages (Description/Evaluation/Data) via the Kaggle API. READ THIS FIRST.",
+       {}, [], kaggle_overview),
     _t("memory_recall", "Recall lessons from past runs/tasks (optionally filter by query).",
        {"query": {"type": "string"}}, [], memory_recall),
     _t("memory_write", "Save a durable lesson for future runs (name + markdown content).",

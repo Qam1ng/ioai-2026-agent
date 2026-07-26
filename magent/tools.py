@@ -70,6 +70,14 @@ async def kaggle_submissions(args):
     return _run(R.kaggle_submissions, args)
 
 
+@tool("kaggle_overview", "Fetch the competition's OFFICIAL task pages "
+      "(Description / Evaluation / Data) via the Kaggle API. Works for "
+      "private competitions. READ THIS FIRST — it is the authoritative task "
+      "statement and metric definition.", {})
+async def kaggle_overview(args):
+    return _run(R.kaggle_overview, args)
+
+
 @tool("memory_recall", "Recall distilled lessons from past runs (optional "
       "query filter). Use early.", {"query": str})
 async def memory_recall(args):
@@ -95,13 +103,13 @@ async def skill_load(args):
 SERVER = create_sdk_mcp_server(
     name="ioai",
     version="1.0.0",
-    tools=[kaggle_download, kaggle_push_kernel, kaggle_kernel_status,
+    tools=[kaggle_overview, kaggle_download, kaggle_push_kernel, kaggle_kernel_status,
            kaggle_kernel_log, kaggle_submit, kaggle_submissions,
            memory_recall, memory_write, skill_list, skill_load],
 )
 
 # fully-qualified tool names as the SDK exposes them
 TOOL_NAMES = [f"mcp__ioai__{n}" for n in
-              ["kaggle_download", "kaggle_push_kernel", "kaggle_kernel_status",
+              ["kaggle_overview", "kaggle_download", "kaggle_push_kernel", "kaggle_kernel_status",
                "kaggle_kernel_log", "kaggle_submit", "kaggle_submissions",
                "memory_recall", "memory_write", "skill_list", "skill_load"]]
