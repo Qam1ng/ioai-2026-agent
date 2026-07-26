@@ -31,7 +31,7 @@ from .agents import AGENTS
 from .prompts import MANAGER_SYSTEM, START_PROMPT, CONTINUE_PROMPT
 
 ROOT = Path(__file__).resolve().parents[1]
-MODEL = "claude-fable-5"          # user decision: Fable 5 only on this branch
+DEFAULT_MODEL = "claude-fable-5"  # branch default; --model enables ablations
 
 
 def budget_line(b: Budget) -> str:
@@ -70,7 +70,7 @@ async def run(args) -> None:
         return {}
 
     options = ClaudeAgentOptions(
-        model=MODEL,
+        model=args.model,
         system_prompt=MANAGER_SYSTEM.format(slug=args.slug, n_repos=args.repos),
         agents=AGENTS,
         mcp_servers={"ioai": T.SERVER},
@@ -88,9 +88,9 @@ async def run(args) -> None:
         },
     )
 
-    print(f"launch multiagent-sdk | slug={args.slug} model={MODEL} "
+    print(f"launch multiagent-sdk | slug={args.slug} model={args.model} "
           f"repos={args.repos}\nworkspace={ws}")
-    trace.log("launch", slug=args.slug, model=MODEL, repos=args.repos)
+    trace.log("launch", slug=args.slug, model=args.model, repos=args.repos)
 
     async with ClaudeSDKClient(options=options) as client:
         last_turns = 99
@@ -160,6 +160,8 @@ async def run(args) -> None:
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--slug", required=True)
+    ap.add_argument("--model", default=DEFAULT_MODEL,
+                    help="LLM for ALL agents (ablation: claude-opus-4-8)")
     ap.add_argument("--brief", default=None)
     ap.add_argument("--repos", type=int, default=2,
                     help="parallel solution repos (dev: keep small for cost)")
