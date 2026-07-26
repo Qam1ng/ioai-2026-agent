@@ -408,13 +408,93 @@ class TaskPod:
                 self._stop_reason = action.reason or "manager stopped"
                 return "stopping"
 
-            if a in ("profile", "report"):
-                return f"{a} handled by the pod lifecycle, not the loop"
+            if a == "profile":
+                # Must actually re-profile. Returning a polite no-op here made
+                # the Manager's most-chosen action change nothing, so it asked
+                # again, forever: 11 profile requests, 0 profiler runs.
+                self.bb.task_card_path.unlink(missing_ok=True)
+                card = self.ensure_task_card()
+                return (
+                    f"re-profiled: task_type={card.task_type} metric={card.metric_name!r} "
+                    f"constraints={len(card.constraints)}"
+                )
+
+            if a == "report":
+                self._finalize()
+                return "report written"
 
             return f"unknown action {a!r}"
         except Exception as exc:
             self._errors.append(f"dispatch {a} failed: {exc}")
             return f"[error] {type(exc).__name__}: {exc}"
+
+    #: How many times an action may leave the world unchanged before the pod
+    #: stops trusting the Manager's routing and forces the next step itself.
+    STALL_LIMIT = 3
+
+    def _progress_key(self, snap: dict) -> tuple:
+        """A coarse fingerprint of 'did anything actually happen'."""
+        return (
+            snap.get("task_type"),
+            snap.get("n_plans"),
+            len(snap.get("candidates") or []),
+            snap.get("n_submissions"),
+            snap.get("best_local"),
+        )
+
+    def _check_progress(self, action: ManagerAction, snap: dict, observation: str) -> str:
+        """Break livelocks: a Manager whose actions change nothing must be overruled.
+
+        Observed on the radar rehearsal: 23 Manager steps alternating profile
+        and design, 10 Designer runs that each returned zero plans, 927k input
+        tokens spent, and no candidate ever created. The Manager was reasoning
+        correctly about a world that never moved; only the pod can see that.
+        """
+        after = self._progress_key(self.bb.snapshot())
+        before = self._progress_key(snap)
+        if after != before:
+            self._stall_count = 0
+            return observation
+
+        self._stall_count = getattr(self, "_stall_count", 0) + 1
+        if self._stall_count < self.STALL_LIMIT:
+            return (
+                f"{observation}\nWARNING: that action changed nothing "
+                f"({self._stall_count}/{self.STALL_LIMIT} consecutive). Pick a different action."
+            )
+
+        self.bb.event("stall_break", action=action.action, count=self._stall_count)
+        self._stall_count = 0
+        forced = self._force_progress()
+        return f"{observation}\nSTALL BROKEN BY POD: {forced}"
+
+    def _force_progress(self) -> str:
+        """Do the most useful thing that is guaranteed to move state."""
+        if not self._has_floor():
+            self._force_floor_submission()
+            return "forced the floor submission"
+        if not self.bb.get_plans():
+            # The Designer keeps failing; seed a floor plan so coding can start
+            # at all. A weak plan that produces a candidate beats a perfect plan
+            # that never gets written.
+            plan = PlanCard(
+                title="minimal valid submission",
+                family="floor",
+                architecture="constant or trivial prediction in the required output format",
+                data_strategy="none; read only what the output format needs",
+                validation_strategy="format validation only",
+                expected_runtime_min=2.0,
+                accelerator="cpu",
+                rationale="pod-seeded after the designer failed to produce any plan",
+            )
+            self.bb.add_plan(plan)
+            return f"seeded fallback plan {plan.plan_id}"
+        used = {c.plan_id for c in self.bb.get_candidates()}
+        fresh = [p for p in self.bb.get_plans() if p.plan_id not in used]
+        if fresh and self._capacity() > 0:
+            cid = self.launch_candidate(fresh[0])
+            return f"launched candidate {cid} without waiting for the manager"
+        return "no forced action available; waiting on running candidates"
 
     def _do_probe(self, action: ManagerAction) -> str:
         role = self._role("prober")
@@ -544,6 +624,7 @@ class TaskPod:
                     reason=action.reason[:300],
                 )
                 observation = self.dispatch(action)
+                observation = self._check_progress(action, snapshot, observation)
 
             # Consolidation happens whether or not the Manager asked for it.
             if not self._has_floor():
