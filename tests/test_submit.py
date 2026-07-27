@@ -594,3 +594,39 @@ def test_broker_status_summarises_everything_a_manager_needs(tmp_path):
     st = broker.status()
     for key in ("used_by_lane", "allowance", "gpu_quota", "submissions_left", "noise_band"):
         assert key in st
+
+
+def test_kernel_id_is_unique_per_submission_not_just_per_candidate():
+    """First live run: the floor lane and the milestone lane pushed the SAME
+    candidate to the SAME Kaggle kernel slug concurrently; both threads then
+    polled one kernel and neither submission completed."""
+    from swarm.submit.kernel import unique_kernel_id
+
+    user, slug, cand = "someuser", "ioai-2026-ai-models-track-practice-task-1", "cand-eca53733"
+    floor = unique_kernel_id(user, slug, cand, "sub-202705bd")
+    milestone = unique_kernel_id(user, slug, cand, "sub-eda5672b")
+    assert floor != milestone, "concurrent pushes must not share a kernel slug"
+    # still deterministic, still scoped to the competition and the candidate
+    assert floor == unique_kernel_id(user, slug, cand, "sub-202705bd")
+    assert unique_kernel_id(user, slug, "cand-a") != unique_kernel_id(user, slug, "cand-b")
+    for ref in (floor, milestone):
+        owner, _, kslug = ref.partition("/")
+        assert owner == user and 0 < len(kslug) <= 50
+
+
+def test_parse_status_accepts_the_real_cli_enum_format():
+    """The live CLI prints `has status "KernelWorkerStatus.COMPLETE"`. The old
+    pattern matched only the bare word, so a finished kernel polled until the
+    timeout and its submission was never made."""
+    from swarm.submit.kernel import parse_status
+
+    assert parse_status('ref has status "KernelWorkerStatus.COMPLETE"') == "COMPLETE"
+    assert parse_status('ref has status "KernelWorkerStatus.RUNNING"') == "RUNNING"
+    assert parse_status('ref has status "KernelWorkerStatus.QUEUED"') == "QUEUED"
+    assert (
+        parse_status('ref has status "KernelWorkerStatus.CANCEL_ACKNOWLEDGED"')
+        == "CANCEL_ACKNOWLEDGED"
+    )
+    # the bare form must keep working
+    assert parse_status('ref has status "complete"') == "COMPLETE"
+    assert parse_status("no status here") is None

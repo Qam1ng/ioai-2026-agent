@@ -4,10 +4,10 @@
 # budget; the cost cap only guards against runaway.
 
 deadline_min: 30
-max_cost_usd: 100
+max_cost_usd: 120
 gpu_quota_hours: 30
 kaggle_user: jingyuanzhang1018
-dry_run: true
+dry_run: false
 
 default_model:
   backend: claude

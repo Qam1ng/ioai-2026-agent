@@ -6,7 +6,7 @@
 deadline_min: 30
 max_cost_usd: 25
 gpu_quota_hours: 30
-kaggle_user: qam1ng
+kaggle_user: jingyuanzhang1018
 dry_run: true
 
 default_model:

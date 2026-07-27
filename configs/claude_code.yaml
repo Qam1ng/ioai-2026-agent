@@ -12,7 +12,7 @@
 deadline_min: 360
 max_cost_usd: 1000
 gpu_quota_hours: 30
-kaggle_user: qam1ng
+kaggle_user: jingyuanzhang1018
 dry_run: false
 
 default_model:

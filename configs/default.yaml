@@ -7,7 +7,7 @@
 deadline_min: 360        # one 6-hour competition window
 max_cost_usd: 1000
 gpu_quota_hours: 30      # per Kaggle account per week, shared by all 3 problems of a day
-kaggle_user: qam1ng
+kaggle_user: jingyuanzhang1018
 dry_run: false
 
 # Development runtime: Gemini 3.1 Pro through an OpenAI-compatible gateway.

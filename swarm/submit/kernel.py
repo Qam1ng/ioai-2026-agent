@@ -47,7 +47,13 @@ MAX_KERNEL_SLUG = 44
 _PUSH_VERSION_RE = re.compile(r"kernel version\s+(\d+)\s+successfully pushed", re.I)
 _LOOSE_VERSION_RE = re.compile(r"\bversion\s+(\d+)\b", re.I)
 #: ``kernels status`` prints: '<ref> has status "COMPLETE"'
-_STATUS_RE = re.compile(r'has status\s+"([A-Z_]+)"', re.I)
+#: Real CLI output is `<ref> has status "KernelWorkerStatus.COMPLETE"` — the
+#: enum name, not the bare word. The first live run polled a kernel that had
+#: genuinely finished until the poll timed out, because this pattern only
+#: matched the bare form, and the submission was never made.
+_STATUS_RE = re.compile(
+    r'has\s+status\s+"(?:KernelWorkerStatus\.)?([A-Za-z_]+)"', re.IGNORECASE
+)
 
 #: Kaggle's KernelWorkerStatus enum -> our four terminal/latent buckets.
 _TERMINAL = {
@@ -94,21 +100,31 @@ def slugify(text: str) -> str:
 
 
 # --------------------------------------------------------------------- ids
-def unique_kernel_id(user: str, slug: str, candidate_id: str) -> str:
-    """``<user>/<kernel-slug>`` that is unique per candidate.
+def unique_kernel_id(
+    user: str, slug: str, candidate_id: str, discriminator: str = ""
+) -> str:
+    """``<user>/<kernel-slug>`` unique per candidate AND per submission.
 
     Parallel candidates that share a kernel ref clobber each other's versions,
     and the submission that follows then scores whichever code landed last.
     The competition slug is truncated (it can be 40+ chars) but a short digest
     of the *full* slug is kept so two competitions sharing a prefix cannot
     collide.
+
+    ``discriminator`` exists because a candidate is pushed more than once: the
+    floor lane and the milestone lane both submit the same candidate, and in
+    the first live run both threads pushed and polled the *same* Kaggle kernel
+    concurrently, so neither submission completed. Pass the submission id (or
+    the lane) to keep concurrent pushes on separate kernels.
     """
     comp = slugify(slug)
     digest = hashlib.sha1(slug.encode()).hexdigest()[:4]
     cand = slugify(candidate_id) or "c0"
-    head_budget = MAX_KERNEL_SLUG - len(digest) - len(cand) - 2
+    disc = slugify(discriminator)
+    tail = f"{cand}-{disc}" if disc else cand
+    head_budget = MAX_KERNEL_SLUG - len(digest) - len(tail) - 2
     head = comp[: max(4, head_budget)].strip("-")
-    kernel_slug = f"{head}-{digest}-{cand}"
+    kernel_slug = f"{head}-{digest}-{tail}"
     return f"{slugify(user)}/{kernel_slug}"
 
 

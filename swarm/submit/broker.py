@@ -261,7 +261,11 @@ class SubmissionBroker:
             self.bb.event("submit_blocked", lane=lane, reason=rec.error)
             return rec
 
-        kernel_ref = unique_kernel_id(self.cfg.kaggle_user, self.cfg.slug, candidate_id)
+        # The submission id keeps concurrent pushes of the same candidate
+        # (floor lane and milestone lane) on separate Kaggle kernels.
+        kernel_ref = unique_kernel_id(
+            self.cfg.kaggle_user, self.cfg.slug, candidate_id, rec.sub_id
+        )
         rec.kernel_ref = kernel_ref
         kdir = Path(self.bb.candidate_dir(candidate_id)) / f"kernel_{rec.sub_id}"
         code_file = kernel_ref.split("/", 1)[-1].replace("-", "_") + ".py"
