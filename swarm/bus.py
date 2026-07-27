@@ -280,6 +280,11 @@ class Blackboard:
                     "status": c.status,
                     "local_score": c.local_score,
                     "local_std": c.local_std,
+                    # Provenance travels with every number: only score_source
+                    # == "harness" is a verified measurement; claimed_score is
+                    # a coder's own unverified hint.
+                    "score_source": getattr(c, "score_source", ""),
+                    "claimed_score": getattr(c, "claimed_score", None),
                     "last_error": c.last_error[:200],
                 }
                 for c in cands

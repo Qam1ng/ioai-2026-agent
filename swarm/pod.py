@@ -75,9 +75,9 @@ class TaskPod:
         self._shutdown = threading.Event()
         self._watchdog: threading.Thread | None = None
         # Verification is a pipeline, not a Manager decision: candidates flow
-        # ready -> verified -> (milestone) on their own. One worker, because a
-        # verification runs fold training and two at once would thrash the CPU.
-        self._verify_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="verify")
+        # ready -> verified -> (milestone) on their own. Two workers: run 3's
+        # single worker let one slow candidate starve the whole queue.
+        self._verify_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="verify")
         self._verify_inflight: set[str] = set()
         self._verify_lock = threading.Lock()
         self._harness_lock = threading.Lock()
@@ -164,16 +164,26 @@ class TaskPod:
                     if m >= self.cfg.gates.freeze_min and not self._frozen:
                         self._frozen = True
                         self.bb.event("gate", gate="freeze", minutes=round(m, 1))
-                    if self._frozen and not self._aggregate_started:
+                    if not self._aggregate_started:
                         scored = [
                             c
                             for c in self.bb.get_candidates()
-                            if c.local_score is not None
+                            if c.local_score is not None and c.status != "retired"
                         ]
                         has_final = any(
                             s.lane == "final" for s in self.bb.get_submissions()
                         )
-                        if scored and not has_final:
+                        if has_final:
+                            pass
+                        elif len(scored) >= 2 and m >= self.cfg.gates.freeze_min - max(
+                            6.0, self.cfg.gates.final_submit_buffer_min * 2
+                        ):
+                            # Pre-warm: run 3's aggregator took ~4.5 min against a
+                            # 3-minute freeze->buffer window and missed the final
+                            # lane by 26 seconds. Start as soon as an ensemble is
+                            # possible and the endgame is near, not at the bell.
+                            self._start_aggregate("pre-warm (>=2 scored, endgame near)")
+                        elif self._frozen and scored:
                             self._start_aggregate("freeze watchdog")
                 except Exception as exc:  # the watchdog itself must never die
                     self._errors.append(f"gates watchdog: {exc}")
@@ -346,6 +356,16 @@ class TaskPod:
                     context={"plan": plan.to_dict()},
                 )
                 c = self.bb.get_candidate(cand.candidate_id) or cand
+                # state.json is pod-owned. A coder's CC session can write it
+                # (same sandbox), and in run 3 one did — its self-measured
+                # score then masqueraded as verified. Quarantine any score
+                # that the harness did not produce.
+                if c.local_score is not None and c.score_source != "harness":
+                    c.claimed_score = c.local_score
+                    c.local_score = None
+                    c.local_std = None
+                    c.folds = []
+                    c.score_source = ""
                 if not res.ok:
                     c.status = "failed"
                     c.last_error = res.error or "coder produced no report"
@@ -434,12 +454,16 @@ class TaskPod:
                 cid = action.target
                 if not cid or self.bb.get_candidate(cid) is None:
                     return f"unknown candidate: {cid!r}"
-                queued = self._enqueue_verify(cid, requeue=True)
+                with self._verify_lock:
+                    inflight = cid in self._verify_inflight
+                if inflight:
+                    # Run 3: two redundant Manager re-verifies burned ~45s of a
+                    # starved verify lane re-measuring identical numbers.
+                    return f"{cid} is already queued/verifying; not re-queued"
+                self._enqueue_verify(cid, requeue=True)
                 return (
                     f"re-verification of {cid} queued (runs on the verify worker; "
-                    f"the loop continues)"
-                    if queued
-                    else f"{cid} is already being verified"
+                    "the loop continues)"
                 )
 
             if a == "probe":
@@ -572,13 +596,30 @@ class TaskPod:
             return f"seeded fallback plan {plan.plan_id}"
         used = {c.plan_id for c in self.bb.get_candidates()}
         fresh = [p for p in self.bb.get_plans() if p.plan_id not in used]
-        if fresh and self._capacity() > 0:
+        if fresh and self._capacity() > 0 and not self._frozen:
             cid = self.launch_candidate(fresh[0])
             return f"launched candidate {cid} without waiting for the manager"
         return "no forced action available; waiting on running candidates"
 
     # -------------------------------------------------------- verification
-    def _run_eval_harness(self, candidate_id: str, timeout_s: float | None = None) -> dict | None:
+    #: Harness fidelity ladder. Run 3's lesson: invoking the harness with no
+    #: knobs means "5 folds x full data", which for a from-scratch CPU net is
+    #: an hour — the 600s timeout was mathematically guaranteed, one timeout
+    #: starved the whole verify lane, and the best score landed after the
+    #: window. First-pass verification runs fast; a timeout degrades further
+    #: instead of giving up. Full fidelity is opt-in, never the accident.
+    FIDELITY = {
+        "fast": {"EVAL_MAX_TRAIN": "250", "EVAL_FOLDS": "3", "EVAL_BUDGET_S": "120"},
+        "smoke": {"EVAL_MAX_TRAIN": "100", "EVAL_FOLDS": "2", "EVAL_BUDGET_S": "60"},
+        "full": {},
+    }
+
+    def _run_eval_harness(
+        self,
+        candidate_id: str,
+        timeout_s: float | None = None,
+        fidelity: str = "fast",
+    ) -> dict | None:
         """Score a candidate with the deterministic harness, if one exists.
 
         An LLM estimates; a harness measures. Once the Verifier has built
@@ -587,12 +628,18 @@ class TaskPod:
         significance gate's comparisons between candidates meaningful at all.
         Returns the parsed result dict, or None when no harness exists yet.
         """
+        import os as _os
         import subprocess
         import sys as _sys
 
         script = self.bb.ws / "eval" / "run_eval.py"
         if not script.exists():
             return None
+        env = _os.environ.copy()
+        env.update(self.FIDELITY.get(fidelity, {}))
+        # Keep torch/LightGBM OpenMP runtimes from fighting inside the harness
+        # process (run 3's gbdt verification died with an unattributed SIGSEGV).
+        env.setdefault("OMP_NUM_THREADS", "4")
         try:
             proc = subprocess.run(
                 [_sys.executable, str(script), "--candidate", f"candidates/{candidate_id}"],
@@ -600,9 +647,16 @@ class TaskPod:
                 capture_output=True,
                 text=True,
                 timeout=timeout_s or self.cfg.parallel.tuner_timeout_s,
+                env=env,
             )
         except subprocess.TimeoutExpired:
-            return {"problems": [f"eval harness timed out"], "error": "timeout"}
+            if fidelity == "fast":
+                self.bb.event(
+                    "verify_degraded", candidate_id=candidate_id, to="smoke",
+                    why="fast-fidelity harness run timed out",
+                )
+                return self._run_eval_harness(candidate_id, timeout_s, fidelity="smoke")
+            return {"problems": [f"eval harness timed out ({fidelity})"], "error": "timeout"}
         import json as _json
 
         for line in reversed((proc.stdout or "").strip().splitlines()):
@@ -610,6 +664,8 @@ class TaskPod:
             if line.startswith("{"):
                 try:
                     out = _json.loads(line)
+                    if fidelity != "full":
+                        out.setdefault("problems", []).append(f"fidelity={fidelity}")
                     if proc.returncode != 0:
                         out.setdefault("problems", []).append(
                             f"harness exit={proc.returncode}: {(proc.stderr or '')[-300:]}"
@@ -680,6 +736,7 @@ class TaskPod:
                 cand.local_score = float(score)
                 cand.local_std = float(result.get("local_std") or 0.0)
                 cand.folds = list(result.get("folds") or [])
+                cand.score_source = "harness"
                 cand.status = "ready"
                 self.bb.put_candidate(cand)
                 self.bb.put_calibration(fit_calibration(self.bb))
@@ -695,7 +752,10 @@ class TaskPod:
                     folds=cand.folds,
                     runtime_s=elapsed,
                     accepted=score is not None,
-                    reject_reason="; ".join(map(str, result.get("problems") or []))[:400],
+                    reject_reason=(
+                        "; ".join(map(str, result.get("problems") or []))
+                        + (f" | stderr: {result['error']}" if result.get("error") else "")
+                    )[:600],
                 )
             )
             self.bb.event(

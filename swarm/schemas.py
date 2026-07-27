@@ -120,6 +120,12 @@ class CandidateState:
     status: str = "created"  # created|coding|tuning|ready|failed|retired
     local_score: float | None = None
     local_std: float | None = None
+    #: Who produced local_score. Only "harness" numbers count for selection.
+    #: Run 3 measured why: a coder's self-reported 0.1215 was quoted by the
+    #: Manager as "verified"; the harness later said 0.1669 (+0.045).
+    score_source: str = ""  # "" | harness | coder
+    #: A coder's own unverified measurement, quarantined from selection.
+    claimed_score: float | None = None
     folds: list[float] = field(default_factory=list)
     kernel_dir: str = ""  # relative to workspace
     last_error: str = ""

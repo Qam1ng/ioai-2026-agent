@@ -255,3 +255,100 @@ def test_aggregate_falls_back_to_best_single_candidate(tmp_path):
     finals = [s for s in broker.submissions if s["lane"] == "final"]
     assert finals and finals[0]["candidate_id"] == cand.candidate_id
     assert pod._start_aggregate("test") is False, "aggregate runs exactly once"
+
+
+# ------------------------------------------------- run-3 regression fixes
+def test_coder_written_score_is_quarantined_as_claimed(tmp_path):
+    """Run 3: a coder self-measured 0.1215, wrote it into state.json, and the
+    Manager quoted it as 'verified'. Any score the harness did not produce
+    must be moved to claimed_score before selection can see it."""
+    pod = make_pod(tmp_path)
+    install_harness(pod)
+    plan = __import__("swarm.schemas", fromlist=["PlanCard"]).PlanCard(
+        title="t", family="mlp"
+    )
+    pod.bb.add_plan(plan)
+
+    class SelfReportingCoder:
+        def __init__(self, pod):
+            self.pod = pod
+
+        def run(self, instructions, context=None):
+            # Simulate the coder editing its own state.json with a self-score.
+            cid = context["plan"]["plan_id"] if False else None
+            # find the candidate the pod just created
+            cand = self.pod.bb.get_candidates()[-1]
+            cand.local_score = 0.1215
+            cand.local_std = 0.003
+            self.pod.bb.put_candidate(cand)
+            from swarm.roles.base import RoleResult
+
+            return RoleResult(role="coder", ok=True, report={"status": "ready"})
+
+    pod._roles_override["coder"] = SelfReportingCoder(pod)
+    cid = pod.launch_candidate(plan)
+    pod._futures[cid].result(timeout=10)
+    got = pod.bb.get_candidate(cid)
+    assert got.local_score is None or got.score_source == "harness", (
+        "coder-written score must not survive as a selection input"
+    )
+    if got.local_score is None:
+        assert got.claimed_score == 0.1215, "the hint is preserved, just quarantined"
+
+
+def test_harness_score_carries_provenance(tmp_path):
+    pod = make_pod(tmp_path)
+    install_harness(pod)
+    cand = write_candidate(pod)
+    pod._enqueue_verify(cand.candidate_id)
+    got = wait_verified(pod, cand.candidate_id)
+    assert got.score_source == "harness"
+
+
+def test_window_closed_blocks_every_lane(tmp_path):
+    """Run 3's best score was submitted at T+33.3 of a 30-minute window; only
+    the final lane checked the clock. Now every lane refuses after deadline."""
+    from swarm.submit.broker import SubmissionBroker
+
+    cfg = SwarmConfig()
+    cfg.slug = "t"
+    cfg.dry_run = True
+    bb = Blackboard(tmp_path / "ws")
+    quota = QuotaPool(tmp_path / "q.json", limit_hours=1.0)
+    budget = PodBudget(tmp_path / "b.json", deadline_s=0.0, quota=quota)  # expired
+    broker = SubmissionBroker(bb, budget, cfg, quota)
+    for lane in ("floor", "probe", "milestone", "final"):
+        ok, why = broker.may_submit(lane, local_score=0.9)
+        assert ok is False and "window closed" in why, (lane, why)
+
+
+def test_fast_fidelity_env_reaches_the_harness(tmp_path):
+    pod = make_pod(tmp_path)
+    eval_dir = pod.bb.ws / "eval"
+    eval_dir.mkdir()
+    (eval_dir / "run_eval.py").write_text(
+        "import os, json\n"
+        "print(json.dumps({'local_score': 0.5, 'local_std': 0.0, 'folds': [0.5],\n"
+        "  'problems': [], 'seen_max_train': os.environ.get('EVAL_MAX_TRAIN'),\n"
+        "  'seen_folds': os.environ.get('EVAL_FOLDS')}))\n"
+    )
+    out = pod._run_eval_harness("cand-x", fidelity="fast")
+    assert out["seen_max_train"] == "250" and out["seen_folds"] == "3"
+    assert "fidelity=fast" in out["problems"]
+    full = pod._run_eval_harness("cand-x", fidelity="full")
+    assert full["seen_max_train"] is None
+
+
+def test_stall_breaker_does_not_launch_after_freeze(tmp_path):
+    pod = make_pod(tmp_path)
+    pod.bb.add_plan(
+        __import__("swarm.schemas", fromlist=["PlanCard"]).PlanCard(title="x", family="f")
+    )
+    # floor exists so _force_progress falls through to the launch branch
+    from swarm.schemas import SubmissionRecord
+
+    pod.bb.add_submission(SubmissionRecord(lane="floor", status="scored"))
+    pod._floor_done = True
+    pod._frozen = True
+    out = pod._force_progress()
+    assert "launched" not in out, "no new directions after the freeze"

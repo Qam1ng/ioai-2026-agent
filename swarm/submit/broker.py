@@ -157,6 +157,12 @@ class SubmissionBroker:
         if lane not in LANES:
             return False, f"unknown lane {lane!r}; use one of {list(LANES)}"
 
+        # No lane outlives the window. Run 3's best score was submitted at
+        # T+33.3 of a 30-minute window because only the final lane checked the
+        # clock — in a live competition that submission does not exist.
+        if self.budget.remaining() <= 0:
+            return False, "competition window closed; no lane accepts submissions"
+
         allowance = self.lane_allowance()
         used = self._consumed()
 
