@@ -108,55 +108,75 @@ Measured, not assumed:
 
 ## Architecture
 
-![Architecture](docs/architecture.svg)
+![HearSay architecture](docs/hearsay.svg)
 
-Full design rationale: [DESIGN.md](DESIGN.md). Team onboarding: [docs/READING.md](docs/READING.md).
+Four Claude Code sessions run at once, none of them told what to do. Three
+solvers read the task, decide for themselves where they think it is won, and
+claim that angle on a shared board so the others take a different one. The
+fourth compiles the ruler everybody is measured with, then guards the door.
 
-## How it works
+Everything that decides anything is a script. The agent that produced a
+candidate never says what it is worth; `evaluate.py` reads its predictions on a
+frozen split and computes the number. Nothing is submitted until four gates
+agree, and every gate has a point past which it can no longer refuse — three
+separate runs were lost to gates that could say no indefinitely.
 
-```
-                OUTER agent  (v0 built ✅ — agent/)
-   read a fresh task → write data-loading / features / metric / notebook
-   8 phases: INGEST→ANALYZE→PLAN→SCAFFOLD→BASELINE→EXPERIMENT→FINALIZE→REPORT
-   pluggable LLM backend · tools · memory/skills · budgets · trace
-                              │ (subsumes)
-                              ▼
-   INNER loop  (built ✅)  — src/agent_loop.py (legacy standalone form)
-   ┌─ each iteration ─────────────────────────────────────┐
-   │ agent sees: task + metric + its own past experiments  │
-   │        ↓ decides + writes fit_predict code            │
-   │ harness runs it on cached features                    │
-   │        ↓ scores on a fixed holdout (official metric) ★│  ← objective, no human/LLM judge
-   │        ↓ feeds score / traceback back                 │
-   │ agent self-corrects  (generate → run → verify → fix)  │
-   └───────────────────────────────────────────────────────┘
-                              │
-        take agent's best → build Kaggle notebook → submit → real score
-```
+The design notes worth reading are in **[native/README.md](native/README.md)**,
+which records for each decision the failure that produced it.
 
-The agent talks to the Anthropic API directly (`src/llm.py`, model `claude-opus-4-8`).
-Claude Code was only the development environment — it is **not** required to run.
+### Where the pieces live
+
+| | |
+|---|---|
+| `native/main.py` | launcher, round loops, submission policy, supervision |
+| `native/facts.py` | the board — append-only, provenance-gated, two layers |
+| `native/prompts.py` | the contract appended to Claude Code's preset prompt |
+| `native/supervise.py` | drift reconciliation, stall detection, urgent delivery |
+| `native/scripts/` | recon · folds · checkfolds · evaluate · promote · check_format · integrity |
+| `native/monitor.py` | `./watch` — the board first, stuck gates above it |
+| `native/selftest.py` | 133 checks against hand-computed values |
+| `skills/validation-split/` | how to cut a split, loaded by the evaluator |
+
+### Three things it does differently
+
+**The kernel is left alone.** Claude Code's preset system prompt is kept and
+appended to rather than replaced, settings load normally, and the built-in
+toolset is untouched. The previous branch did all three the other way; a live
+probe now confirms the full toolset, WebSearch included.
+
+**Nobody is assigned an approach.** An earlier version handed one solver the
+model, one the data, one calibration — decided before anyone had read the task.
+On chicken counting the win was that the metric is asymmetric and the target is
+just the density map's sum, which is none of those three.
+
+**No agent can submit.** The evaluator decides which candidate goes and when;
+the harness sends it, so the shared quota is counted in one place. When solvers
+held that power, all three bought insurance inside four minutes and spent a
+whole day's allowance before the metric even existed.
 
 ---
 
 ## Quickstart
 
 ```bash
-export PATH="/path/to/python-with-deps:$PATH"     # needs a GPU + torch
 pip install -r requirements.txt
 
-# credentials (never committed)
-cp .env.example .env                              # paste ANTHROPIC_API_KEY
-mkdir -p ~/.kaggle && printf 'KGAT_...' > ~/.kaggle/access_token && chmod 600 ~/.kaggle/access_token
+# credentials — never committed
+cp .env.example .env                              # ANTHROPIC_API_KEY
+mkdir -p ~/.kaggle && printf 'KGAT_...' > ~/.kaggle/access_token
+chmod 600 ~/.kaggle/access_token
 
-# one command: features → agent loop → build notebook → submit → score
-python run.py --task task1_audio \
-    --slug ioai-2026-ai-models-track-practice-task-1 --iters 6 --submit
+python -m native.selftest                         # 133 checks, no API calls
+
+export CUDA_VISIBLE_DEVICES=4,5,6,7               # only cards that are yours
+python -m native.main --slug <competition> --solvers 3 \
+    --deadline-min 120 --max-cost-usd 100 --max-submissions 4
 ```
 
-Drop `--submit` for a dry run. Just the offline decision loop (no Kaggle):
-`python src/agent_loop.py --task task1_audio --iters 6`.
-Full operator manual: **[RUNBOOK.md](RUNBOOK.md)**.
+That command is the only human action. Watch it with `./watch`, and read
+**[RUNBOOK.md](RUNBOOK.md)** before leaving one running unattended — it covers
+the killswitch, sweeping backgrounded training out of the workspace, and the
+several ways a run has failed to stop cleanly here.
 
 ---
 
