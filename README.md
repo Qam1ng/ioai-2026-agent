@@ -10,7 +10,62 @@ first practice task (**Audio Classifier**, a class-incremental learning problem)
 
 ---
 
-## Status (honest snapshot)
+## Which system to run
+
+Three generations live in this repo. **HearSay is the current one; use it.**
+
+    python -m native.main --slug <competition> --solvers 3 \
+        --deadline-min 120 --max-cost-usd 100 --max-submissions 4
+
+See [`native/README.md`](native/README.md) for the design and, more usefully,
+for which failure produced each decision in it.
+
+| | where | status |
+|---|---|---|
+| **HearSay** — 3 parallel Claude Code solvers, a facts board, a deterministic harness | `native/` | **current** |
+| multiagent-sdk — one SDK client driving stateless subagents | `magent/` | superseded |
+| outer agent v0 — single-agent 8-phase orchestrator | `agent/` | superseded; its tool registry is still shared |
+
+## Results
+
+First place on both IOAI 2025 mirrors, 2026-08-01:
+
+| task | local (OOF) | leaderboard | previous best on that board |
+|---|---|---|---|
+| `radar-ioai-2025` | 0.98601 | **0.98756** | 0.98723 |
+| `ioai-2025-chicken-counting-mirror-unofficial` | 0.918652 | **0.93156** | 0.93002 |
+
+Read those margins carefully. Radar's test set has a bootstrap sampling
+deviation of ~0.00036 and we lead by 0.00033; chicken's test set is smaller
+still. **Both leads sit inside noise** — the honest claim is "competitive with
+the best public entry", not "better than it".
+
+The reproducibility is the stronger result: two independent radar runs, with
+different sessions and different model choices, landed at 0.98756 and 0.98716.
+
+For contrast, the earlier single-agent system on Practice Task 1 scored 0.9156
+on a local holdout and **0.78095** on the leaderboard. Closing that gap — making
+the local number mean something — is most of what HearSay is for.
+
+## What made the difference
+
+Measured, not assumed:
+
+- **The kernel was being crippled.** The previous branch replaced Claude Code's
+  preset system prompt, passed `setting_sources=[]`, and gave subagents a tool
+  whitelist. All three are undone here; a live probe confirms the full toolset,
+  WebSearch included.
+- **Nothing assigns approaches.** Solvers read the task and claim their own
+  angle on the board. A version that pre-assigned model/data/calibration aimed
+  two of three solvers at ground that had nothing in it.
+- **Scores come from scripts, never from the agent that produced them.**
+- **Every gate that can refuse has a point past which it cannot.** Three runs
+  were lost to gates that could say no indefinitely.
+- **The leaderboard score comes back.** The run learns whether its own
+  measurements are trustworthy — on radar the local number ran 0.0012 below the
+  board, on chicken 0.0129 below.
+
+## Earlier status (Practice Task 1, single-agent era)
 
 **What works today**
 - ✅ End-to-end pipeline on Practice Task 1, fully offline on a local GPU:

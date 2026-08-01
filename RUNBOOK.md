@@ -1,136 +1,72 @@
-# RUNBOOK — how to run the IOAI 2026 agent
+# Runbook
 
-This is the operator manual. The system is an **autonomous experiment loop**:
-the agent (Opus 4.8) decides every experiment itself and the harness scores it
-objectively. A human only sets things up and (optionally) presses the final
-"submit" button — the agent makes the ML decisions.
+## Run HearSay
 
----
+    cd ~/IOAI2026-agent
+    export CUDA_VISIBLE_DEVICES=4,5,6,7          # only cards that are ours
+    setsid nohup ~/venvs/ioai312/bin/python -u -m native.main \
+        --slug <competition> --solvers 3 \
+        --deadline-min 120 --max-cost-usd 100 --max-submissions 4 \
+        --model claude-opus-5 --effort high \
+        > run.log 2>&1 < /dev/null &
 
-## 0. One-time setup
+    setsid nohup ./killswitch.sh 7200 >/dev/null 2>&1 </dev/null &
 
-```bash
-cd /home/qing/IOAI2026-agent
+Two things about that second line. `setsid` because plain `nohup` has died on
+ssh disconnect here, and the killswitch because the harness's own deadline has
+been walked past before — it stops the launcher, every agent session, and
+anything the solvers backgrounded out of the workspace. It is the only thing
+that has ever shut a run down cleanly on the first attempt.
 
-# Python deps (GPU box; RTX 4080 present). Python 3.14 / miniconda.
-export PATH="/home/qing/miniconda3/bin:$PATH"
-pip install -r requirements.txt          # anthropic, kaggle, torch, transformers, librosa, sklearn ...
+`--max-submissions` is a ceiling; the real allowance is whatever the daily quota
+has left, checked at boot. Set it well under the daily cap on tight
+competitions — chicken allows five a day and a run that submits on every
+improvement will spend them all.
 
-# Anthropic key (the agent's brain) — gitignored, never commit.
-cp .env.example .env                     # then paste ANTHROPIC_API_KEY (already set on this box)
-python src/llm.py                        # smoke test -> "IOAI-2026 agent online."
+## Watch it
 
-# Kaggle token (for data download + submission), IOAI Discord format:
-mkdir -p ~/.kaggle
-printf 'KGAT_xxxxxxxx' > ~/.kaggle/access_token && chmod 600 ~/.kaggle/access_token
-kaggle competitions files -c <competition-slug>   # verifies auth
-```
+    ./watch                    # most recent workspace, once
+    ./watch <slug> -l          # follow, refreshing every 20s
 
-Environment expectations: `nvidia-smi` shows a GPU; `python -c "import torch;print(torch.cuda.is_available())"` prints `True`.
+The board is the top of that view because it is where everything ends up. If
+`!! STUCK GATE` appears, read it first: a gate that has refused the same thing
+three times is more likely wrong than the run is.
 
----
+## Stop it
 
-## 0.5 One command (standalone — no Claude Code)
+    pkill -f "killswitch.sh"; pkill -9 -f "native.main"; pkill -9 -f "_bundled/claude"
+    for p in $(ls /proc | grep -E '^[0-9]+$'); do
+      case "$(readlink /proc/$p/cwd 2>/dev/null)" in
+        *hearsay*) kill -9 $p;;
+      esac
+    done
 
-The agent is plain Python that calls the Anthropic API directly; Claude Code is
-not required. Run the whole autonomous pipeline (features → agent loop → build
-notebook from the agent's best → push + submit → score) with one command:
+The loop matters. Solvers background their training with `nohup`, and those
+children outlive the session that started them — one run's watcher kept
+submitting eleven minutes after the harness printed its summary.
 
-```bash
-export PATH="/home/qing/miniconda3/bin:$PATH"
-python run.py --task task1_audio \
-    --slug ioai-2026-ai-models-track-practice-task-1 --iters 6 --submit
-```
+Then check, and do not trust `pgrep` here: its own command line contains the
+pattern and it matches itself.
 
-Drop `--submit` for a dry run (stops after building the notebook + local best).
-Just the offline decision loop, no Kaggle:
-`python src/agent_loop.py --task task1_audio --iters 6`.
+    ps -eo cmd --no-headers | grep -c "[n]ative.main --slug"
+    nvidia-smi --query-compute-apps=pid --format=csv,noheader | wc -l
 
----
+## Environment (UCLA box)
 
-## 1. Per-task workflow (step by step)
+    ~/venvs/ioai312/bin/python          torch+cu130, kaggle, claude-agent-sdk
+    /data/qyan/ioai/<slug>/             competition data, symlinked as input/
 
-Everything lives under `tasks/<task>/`. Example: `task1_audio`.
+The venv was created with `uv` and has no `pip`; install with
+`VIRTUAL_ENV=~/venvs/ioai312 ~/.local/bin/uv pip install <pkg>`.
 
-### a) Get the data (once)
-```bash
-SLUG=ioai-2026-ai-models-track-practice-task-1
-IN=tasks/task1_audio/input
-kaggle competitions download -c $SLUG -p $IN
-unzip -q -o $IN/$SLUG.zip -d $IN        # -> audio/, model/, *.csv
-```
+Cards 0-3 belong to other people. Set `CUDA_VISIBLE_DEVICES` to 4-7 and note
+that a child process setting it again *replaces* the restriction rather than
+indexing into it — a run reached GPU 0 that way. The harness now refuses those
+commands, but the launcher's own variable is what defines "ours".
 
-### b) Extract frozen features (once, ~3 min on the 4080)
-Runs the frozen encoder over every clip and caches 768-d embeddings so the
-agent loop iterates in seconds instead of minutes.
-```bash
-python tasks/task1_audio/features.py     # -> tasks/task1_audio/cache/{embeddings.npy, old_head_*.npy, paths.txt}
-```
+## Checks
 
-### c) Run the autonomous agent loop  ← the main event
-The agent proposes + codes each experiment; the harness runs it on cached
-features and scores it with the official metric on a fixed local holdout.
-```bash
-python src/agent_loop.py --task task1_audio --iters 6
-```
-Outputs:
-- live log of each decision and its holdout score, marking new bests
-- `tasks/task1_audio/runs/history.json` — every experiment (name, code, score, diagnostics)
-- `tasks/task1_audio/runs/best.json` — the agent's best decision
-- `tasks/task1_audio/submission.csv` — predictions from the best (NOT yet submitted)
-
-Flags: `--iters N` (budget), `--seed S` (holdout split).
-
-### d) Inspect what the agent did
-```bash
-python - <<'PY'
-import json
-h=json.load(open("tasks/task1_audio/runs/history.json"))
-for r in h:
-    if r.get("error"): print(r["iter"], r["name"], "ERROR", r["error"])
-    else: print(r["iter"], round(r["score"]["score"],4), r["name"])
-PY
-```
-
-### e) Submit (the one human-gated step)
-Validate that our local holdout tracks the real leaderboard, then submit:
-```bash
-kaggle competitions submit -c $SLUG \
-  -f tasks/task1_audio/submission.csv -m "agent-loop best"
-kaggle competitions submissions -c $SLUG | head   # read the public score
-```
-> In the real IOAI² run the agent submits autonomously via the Kaggle CLI (no
-> human). During development we keep this manual so a human can gate it.
-
----
-
-## 2. What each piece is
-
-| Path | Role |
-|---|---|
-| `src/llm.py` | Anthropic client (Opus 4.8, adaptive thinking, streaming) |
-| `src/metric.py` | Official metric `0.5·acc_old + 0.5·acc_new` — the objective verifier |
-| `src/agent_loop.py` | The autonomous loop: agent decides → harness executes + scores → feeds back |
-| `tasks/<t>/features.py` | One-time frozen-encoder feature extraction + cache |
-| `tasks/<t>/solve.py` | A hand-written baseline solver (reference; the loop supersedes it) |
-| `tasks/<t>/CARD.md` | Task spec |
-| `tasks/<t>/cache/` | Cached embeddings + frozen head |
-| `tasks/<t>/runs/` | The agent's experiment history + best |
-
----
-
-## 3. How the loop makes decisions (design)
-
-Each iteration the agent receives: the task + metric, the feature API
-(`fit_predict(Xtr, ytr, Xva, old_W, old_b) -> preds`), and the full history of
-its past experiments with their holdout scores and per-class diagnostics. It
-returns a rationale + a `fit_predict` code block. The harness `exec`s it, scores
-the holdout, and — if the code crashes — feeds the traceback back so the agent
-self-corrects next turn (generate → execute → verify-by-metric → correct).
-
-**No human proposes experiments.** The score improvement across iterations is
-attributable to the agent, which is the quantity IOAI² measures.
-
-To add a new task: create `tasks/<name>/`, drop the data in `input/`, write a
-`features.py` that caches `embeddings.npy` + the frozen head + `paths.txt`, then
-run `agent_loop.py --task <name>`.
+    python -m native.selftest                          # 133, hand-computed
+    python -m native.monitor --slug <slug> --json
+    python -m native.scripts.checkfolds --workspace <ws>
+    python -m native.scripts.integrity --candidate <s> --workspace <ws>
