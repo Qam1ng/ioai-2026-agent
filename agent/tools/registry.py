@@ -102,8 +102,22 @@ def list_dir(args, ctx):
 # --------------------------------------------------------------------------- #
 # kaggle
 # --------------------------------------------------------------------------- #
+def _kaggle_bin() -> str:
+    """Where the kaggle CLI actually is.
+
+    A bare "kaggle" only resolves when the virtualenv's bin is on PATH, which it
+    is not when the launcher runs detached — the whole run died on
+    FileNotFoundError inside the download step. The interpreter running this
+    code is the venv's, so its sibling is the right binary.
+    """
+    import shutil
+    import sys
+    beside = Path(sys.executable).parent / "kaggle"
+    return str(beside) if beside.exists() else (shutil.which("kaggle") or "kaggle")
+
+
 def _kg(cmd: list[str], timeout=1800):
-    r = subprocess.run(["kaggle"] + cmd, capture_output=True, text=True,
+    r = subprocess.run([_kaggle_bin()] + cmd, capture_output=True, text=True,
                        timeout=timeout)
     return _tail((r.stdout or "") + (("\n[stderr]\n" + r.stderr) if r.stderr else ""))
 
@@ -194,18 +208,49 @@ def kaggle_overview(args, ctx):
     api = KaggleApi(); api.authenticate()
     r = api.competition_list_pages(ctx.slug)
     pages = getattr(r, "pages", r) or []
-    keep = {"description", "evaluation", "data-description", "abstract",
-            "overview", "timeline", "citation"}
+    # Deny-list, NOT an allow-list. Competition authors name the scoring page
+    # whatever they like — chicken-counting calls it "Evaluation", radar calls
+    # it "Metric" — and an allow-list drops the unrecognised one *silently*.
+    # Losing the scoring definition is the worst possible failure here: the
+    # metric gets guessed, every downstream number is measured with the wrong
+    # ruler, and nothing notices until the leaderboard disagrees with local CV.
+    # Over-including costs a few tokens; under-including costs the run.
+    drop = ("rules", "terms", "license", "faq", "prizes", "team")
     out = []
     for p in pages:
-        name = (getattr(p, "name", "") or "").lower()
-        content = getattr(p, "content", "") or ""
-        if name in keep and content.strip():
-            out.append(f"# [{name}]\n{content.strip()}")
-    if not out:  # fall back to everything except legal boilerplate
-        out = [f"# [{getattr(p,'name','?')}]\n{(getattr(p,'content','') or '')[:4000]}"
-               for p in pages if "rules" not in (getattr(p, "name", "") or "").lower()]
-    return _tail("\n\n".join(out), 16000)
+        name = (getattr(p, "name", "") or "").strip()
+        content = (getattr(p, "content", "") or "").strip()
+        if content and not any(d in name.lower() for d in drop):
+            out.append(f"# [{name}]\n{content}")
+    if not out:  # nothing survived — show everything rather than nothing
+        out = [f"# [{getattr(p, 'name', '?')}]\n{(getattr(p, 'content', '') or '')[:4000]}"
+               for p in pages]
+    body = "\n\n".join(out)
+
+    # Some competitions (mirrors especially) ship Kaggle's unfilled page
+    # template. That is worse than an empty page: the template *demonstrates*
+    # a metric ("evaluated on area under the ROC curve") and a submission
+    # format, so a page with no real content still reads as a confident,
+    # specific, wrong answer. Flag it loudly rather than hoping it gets noticed.
+    TEMPLATE = (
+        "below is an example of a typical evaluation page",
+        "the evaluation section describes how submissions will be scored",
+        "the description section is used to further explain",
+        "this page appears alongside the data files",
+        "you can upload images using the",
+    )
+    low = body.lower()
+    hits = [t for t in TEMPLATE if t in low]
+    if hits:
+        body = (
+            "!! WARNING — UNFILLED KAGGLE TEMPLATE DETECTED IN THESE PAGES !!\n"
+            "Boilerplate phrases found: " + "; ".join(f'\"{h}\"' for h in hits) +
+            "\nThe author left Kaggle's example text in place. Any metric or "
+            "submission format stated below may be the TEMPLATE'S EXAMPLE, not "
+            "this competition's. Do not implement a metric from these pages "
+            "without corroborating it against sample_submission.csv, the actual "
+            "data, and the task described in the title/abstract.\n\n" + body)
+    return _tail(body, 16000)
 
 
 # --------------------------------------------------------------------------- #
