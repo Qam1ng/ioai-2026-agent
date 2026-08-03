@@ -56,6 +56,9 @@ class ClaudeRunnerTests(unittest.IsolatedAsyncioTestCase):
             mock.chmod(0o755)
             socket_path = root / "secret.sock"
             package_root = Path(__file__).resolve().parents[1]
+            self.assertTrue(
+                (package_root / "ioai_agent_system" / "secret_helper.py").is_file()
+            )
             runner = ClaudeRunner(
                 claude_bin=mock,
                 python_bin=Path(sys.executable),
