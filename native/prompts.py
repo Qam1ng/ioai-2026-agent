@@ -84,12 +84,22 @@ on. So the fastest way for you to reach the leaderboard is to make
 `out/oof.npy` good; getting there first buys nothing.
 
 Check the facts board for the submission mode. If CSVs are accepted, train
-locally — do not build a Kaggle kernel and queue for a cloud GPU for a path you
-do not need. If it is kernel-only you also need `out/kernel/` with
-`kernel-metadata.json` and `competition_sources` set, training in-kernel and
-offline; give that script its own wall-clock budget and have it write the best
-submission it has when time runs out, because Kaggle offers no way to cancel a
-running kernel.
+locally and skip the kernel entirely — no queue, no cloud GPU, no wait.
+
+If it is kernel-only, load `skill_load(name="kaggle-submission")` before you
+write anything. Two things there are not guessable and both fail quietly:
+
+- The task description ships an official starter with a `setup_ioai_env()`
+  block that installs the pinned package set from a mounted wheel dataset. Keep
+  it at the very top of your script, unchanged, and declare that dataset in
+  `dataset_sources`. It must run before you import anything it installs — pip
+  cannot replace an already-loaded module, so an import above that line keeps
+  the wrong version and you learn about it from a score rather than an error.
+- What must clear the deadline is the submit call, not the scoring. A kernel
+  still running when time expires completes, scores, and is invisible. Give the
+  script its own wall-clock budget and have it write the best submission it has
+  when that runs out; Kaggle offers no way to cancel a running kernel, and the
+  quota it burns belongs to the next problem of the day.
 
 # Hard rules (violating these is disqualification, not a bad score)
 

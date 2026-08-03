@@ -132,6 +132,21 @@ def make_server(solver_id: str):
         from .main import quota_report
         return {"content": [{"type": "text", "text": quota_report(_CTX.workspace)}]}
 
+    @tool("gpu_kernel_lease",
+          "Claim one of Kaggle's GPU kernel slots before `kaggle kernels push` "
+          "with enable_gpu. Kaggle allows only TWO GPU kernels running at once "
+          "across the whole account, and there are more of us than that — a "
+          "push made without a slot just queues, and a queued kernel still "
+          "holds the slot it is waiting for. Call with action='take'; if it "
+          "says wait, do something else and ask again. Call action='release' "
+          "the moment your kernel reaches COMPLETE or ERROR. CPU kernels do "
+          "not need this (five may run at once).",
+          {"action": str})
+    async def gpu_kernel_lease(args):
+        from .main import gpu_lease
+        return {"content": [{"type": "text", "text": gpu_lease(
+            str(args.get("action", "take")), solver_id)}]}
+
     @tool("recon",
           "Re-run the deterministic reconnaissance over input/ and post what it "
           "finds to the facts board: train/test duplicate overlap, duplicates "
@@ -151,9 +166,9 @@ def make_server(solver_id: str):
         return {"content": [{"type": "text",
                              "text": (r.stdout or r.stderr)[-4000:]}]}
 
-    tools += [fact_post, fact_read, recon, submission_status]
+    tools += [fact_post, fact_read, recon, submission_status, gpu_kernel_lease]
     server = create_sdk_mcp_server(name="ioai", version="2.1.0", tools=tools)
     names = [f"mcp__ioai__{n}" for n, *_ in _KAGGLE]
     names += ["mcp__ioai__fact_post", "mcp__ioai__fact_read", "mcp__ioai__recon",
-              "mcp__ioai__submission_status"]
+              "mcp__ioai__submission_status", "mcp__ioai__gpu_kernel_lease"]
     return server, names

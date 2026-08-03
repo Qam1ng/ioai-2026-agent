@@ -534,6 +534,52 @@ def test_integrity(ws: Path) -> None:
     check("run log template exists", "does and does not show" in M.RUNLOG, True)
 
 
+def test_submission_mode() -> None:
+    """Which route a submission takes, and what happens when we cannot tell.
+
+    `competitions_list` does not return private competitions, and every task on
+    the day that counts is private — so the real tasks will all report
+    "unknown". Defaulting that to the CSV shortcut means not submitting at all
+    on a kernel-only competition, which is what IOAI proper is.
+    """
+    print("\n[submission mode]")
+    import inspect
+    import native.main as M
+    from native.prompts import CONTRACT
+
+    src = inspect.getsource(M.send_candidate)
+    check("CSV taken only when positively established",
+          'SUBMIT_MODE["mode"] == "csv"' in src, True)
+    check("  so unknown falls through to the kernel path",
+          'SUBMIT_MODE["mode"] != "kernel"' in src, False)
+
+    # A kernel may run half an hour; what has to clear the deadline is the
+    # submit call, not the scoring.
+    check("waits long enough for a real kernel", M.KERNEL_MAX_S >= 30 * 60, True)
+    check("reserves time to actually submit", M.SUBMIT_RESERVE_S > 0, True)
+    poll = inspect.signature(M.send_candidate).parameters["poll_s"].default
+    for left_min, want in ((120, True), (30, True), (3, False)):
+        left = left_min * 60 - M.SUBMIT_RESERVE_S
+        check(f"  {left_min} min left -> {'push' if want else 'refuse'}",
+              left > 0, want)
+
+    # Neither of these is guessable from the CLI docs, and both fail quietly.
+    check("contract names the env block", "setup_ioai_env" in CONTRACT, True)
+    check("contract names the wheel dataset mount",
+          "dataset_sources" in CONTRACT, True)
+    check("contract says the submit is what must beat the deadline",
+          "submit call, not the scoring" in CONTRACT, True)
+
+    from agent.tools import registry as Rg
+    c = Rg.Ctx(workspace=ROOT, slug="x", budget=None, trace=None)
+    listing = Rg.skill_list({}, c)
+    check("the organisers' own playbook is available",
+          "kaggle-cli-official" in listing, True)
+    ours = Rg.skill_load({"name": "kaggle-submission"}, c)
+    check("  and ours covers what it omits", "setup_ioai_env" in ours, True)
+    check("  including not pushing twice by reflex", "Push once" in ours, True)
+
+
 def test_calibration() -> None:
     """The loop back from the leaderboard, which was never closed.
 
@@ -613,6 +659,7 @@ def main() -> int:
     test_configs()
     test_submit_gate()
     test_solver_cannot_submit()
+    test_submission_mode()
     test_calibration()
     test_supervision()
     print("\n" + ("ALL PASS" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))

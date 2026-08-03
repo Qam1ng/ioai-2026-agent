@@ -774,7 +774,38 @@ def should_submit(*, n_scored: int, frac: float, best: dict | None,
                    f"{frac:.0%} of the window gone")
 
 
+# Kaggle runs at most two GPU kernels per account at once, and we run three
+# solvers. Without a lease the third push simply queues, and a queued kernel
+# still occupies the slot it is waiting on — which is how a team ends up with
+# one effective slot instead of two.
+GPU_SLOTS = 2
+_LEASES: dict[str, float] = {}
+LEASE_TTL_S = 40 * 60
+
+
+def gpu_lease(action: str, who: str) -> str:
+    now = time.time()
+    for k, t in list(_LEASES.items()):
+        if now - t > LEASE_TTL_S:
+            del _LEASES[k]          # a holder that died must not hold forever
+    if action.startswith("rel"):
+        _LEASES.pop(who, None)
+        return f"released. {GPU_SLOTS - len(_LEASES)} of {GPU_SLOTS} free."
+    if who in _LEASES:
+        return f"you already hold a slot ({GPU_SLOTS - len(_LEASES)} free)."
+    if len(_LEASES) >= GPU_SLOTS:
+        return (f"WAIT — both GPU slots are taken by {sorted(_LEASES)}. Do "
+                f"something else and ask again; pushing now would queue and "
+                f"tie up a slot without running.")
+    _LEASES[who] = now
+    return f"granted. {GPU_SLOTS - len(_LEASES)} of {GPU_SLOTS} still free."
+
+
 SUBMIT_MODE = {"mode": "csv"}
+# A Kaggle kernel may run for thirty minutes; leave room to still call submit
+# afterwards, because that call is what has to land before the deadline.
+KERNEL_MAX_S = 35 * 60
+SUBMIT_RESERVE_S = 5 * 60
 REVIEWER: dict = {"client": None}
 # Last score announced per candidate, so a re-scored but unchanged candidate
 # does not repost the same number every round.
@@ -940,7 +971,8 @@ async def clear_for_submission(ws: Path, cand: str, args, trace: Tracer,
 
 
 def send_candidate(ws: Path, candidate: str, csv: Path, msg: str, ctx,
-                   trace: Tracer, poll_s: int = 20, waits: int = 30) -> str:
+                   trace: Tracer, poll_s: int = 20,
+                   budget: Budget | None = None) -> str:
     """Send one candidate, by whichever route this competition actually accepts.
 
     IOAI proper is kernel-only — the submitted script has to train in-kernel —
@@ -952,12 +984,29 @@ def send_candidate(ws: Path, candidate: str, csv: Path, msg: str, ctx,
     out-of-fold score is still worth nothing if its notebook crashes on Kaggle.
     So push, wait for it to actually finish, and only submit a version that ran.
     """
-    if SUBMIT_MODE["mode"] != "kernel":
+    # Only take the CSV shortcut when we positively established it is allowed.
+    # `competitions_list` does not return private competitions, so every task on
+    # the day that counts will come back "unknown" — and defaulting that to CSV
+    # would mean not submitting at all on a kernel-only competition, which is
+    # what IOAI proper is. The docstring above already claimed unknown fell
+    # through to the strict path; the condition said otherwise.
+    if SUBMIT_MODE["mode"] == "csv":
         return str(R.kaggle_submit({"csv_path": str(csv), "message": msg}, ctx))
 
     kdir = ws / candidate / "out" / "kernel"
     if not (kdir / "kernel-metadata.json").exists():
         return f"[skip] {candidate} has no out/kernel/kernel-metadata.json"
+
+    # A kernel may run for up to thirty minutes. Waiting only ten, as this did,
+    # means abandoning every submission whose training is longer than that.
+    # What actually has to happen before the deadline is the `submit` call —
+    # the organisers confirmed scoring may finish after it — so wait as long as
+    # there is time to still submit, and no longer.
+    left = (budget.remaining() if budget else 3600) - SUBMIT_RESERVE_S
+    waits = max(3, int(min(KERNEL_MAX_S, left) / poll_s))
+    if left <= 0:
+        return (f"[skipped] {(budget.remaining() if budget else 0)/60:.0f} min "
+                f"left, not enough to push a kernel and still submit in time")
 
     push = str(R.kaggle_push_kernel({"kernel_dir": str(kdir)}, ctx))
     trace.log("kernel_push", candidate=candidate, out=push[:300])
@@ -1046,7 +1095,8 @@ async def submitter(ws: Path, args, names: list[str], budget: Budget,
 
         ctx = R.Ctx(workspace=ws, slug=args.slug, budget=budget, trace=trace)
         try:
-            res = str(send_candidate(ws, cand, csv, f"{msg}; {note}", ctx, trace))
+            res = str(send_candidate(ws, cand, csv, f"{msg}; {note}", ctx,
+                                     trace, budget=budget))
         except Exception as e:  # noqa: BLE001
             res = f"[submit error] {type(e).__name__}: {e}"
         sent_best = best["mean"]
@@ -1292,8 +1342,13 @@ def bootstrap(ws: Path, args, budget: Budget, trace: Tracer) -> None:
         note = (f"This competition is kernel-only: submissions must come from a "
                 f"notebook that trains in-kernel. Daily limit: {limit}.")
     else:
-        note = ("Could not determine whether this competition is kernel-only; "
-                "assume it is and produce a kernel.")
+        note = ("Could not determine the submission mode — the API does not "
+                "list private competitions, which is what the real tasks are. "
+                "Treat this as kernel-only and produce `out/kernel/`: the task "
+                "description carries the wheel dataset to mount and the "
+                "setup_ioai_env block the script must start with. Write "
+                "out/submission.csv as well, in case a CSV is accepted after "
+                "all.")
     SUBMIT_MODE["mode"] = mode
     print(f"[boot] submission mode: {mode} (daily limit {limit})", flush=True)
     facts.board().post("format", note, src="harness")
