@@ -113,6 +113,25 @@ def parse_research_plan(markdown: str) -> ResearchPlan:
             markdown,
         )
     )
+    heading_style = False
+    if not block_matches and enabled_ids:
+        # Claude 偶尔会把章程写成“## R1 — 标题”，同时把预算保留在顶部 YAML。
+        # 接受这一等价表示，避免将有效的显式研究计划误判为默认降级计划。
+        block_matches = list(
+            re.finditer(r"(?mi)^\s{0,3}#{2,6}\s+(R[1-4])\b.*$", markdown)
+        )
+        heading_style = bool(block_matches)
+
+    shared_budgets: dict[str, float] = {}
+    if heading_style:
+        prefix = markdown[: block_matches[0].start()]
+        shared_budgets = {
+            match.group(1): float(match.group(2))
+            for match in re.finditer(
+                r"(?mi)^\s+(R[1-4])\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*$",
+                prefix,
+            )
+        }
     charters: dict[str, ResearchCharter] = {}
     for index, match in enumerate(block_matches):
         research_id = match.group(1)
@@ -124,9 +143,13 @@ def parse_research_plan(markdown: str) -> ResearchPlan:
             r"(?mi)^\s*(?:[-*]\s*)?time_budget_minutes\s*:\s*([0-9]+(?:\.[0-9]+)?)\s*$",
             block,
         )
-        if budget_match is None:
+        if budget_match is None and research_id not in shared_budgets:
             raise PromptSpecError(f"{research_id} lacks time_budget_minutes")
-        budget = float(budget_match.group(1))
+        budget = (
+            float(budget_match.group(1))
+            if budget_match is not None
+            else shared_budgets[research_id]
+        )
         if budget <= 0:
             raise PromptSpecError(f"{research_id} has a non-positive time budget")
         charters[research_id] = ResearchCharter(research_id, budget, block)

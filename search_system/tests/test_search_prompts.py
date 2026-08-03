@@ -47,6 +47,30 @@ primary_scope: similar tasks
         with self.assertRaises(PromptSpecError):
             render_prompt("hello {missing_value}", {})
 
+    def test_research_plan_accepts_heading_charters_with_shared_budgets(self) -> None:
+        markdown = """```yaml
+research_plan:
+  enabled_research_ids: [R1, R3]
+  time_budget_minutes:
+    R1: 25
+    R3: 20
+```
+
+## R1 — Kernel 工程契约
+
+**primary_scope**
+核实 API 与依赖。
+
+## R3 — 增量学习
+
+**primary_scope**
+核实抗遗忘方法。
+"""
+        plan = parse_research_plan(markdown)
+        self.assertEqual(plan.enabled_ids, ("R1", "R3"))
+        self.assertEqual(plan.charters["R1"].time_budget_minutes, 25)
+        self.assertEqual(plan.charters["R3"].time_budget_minutes, 20)
+
 
 if __name__ == "__main__":
     unittest.main()
