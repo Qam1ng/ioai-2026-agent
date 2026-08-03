@@ -730,7 +730,16 @@ def announce(text: str, kind: str = "env", why: str = "") -> None:
               f"the board's {facts.MAX_TEXT} — truncating. Say it shorter.",
               flush=True)
         text = text[:facts.MAX_TEXT - 1]
-    r = facts.board().post(kind, text, src="harness")
+    try:
+        r = facts.board().post(kind, text, src="harness")
+    except Exception as e:  # noqa: BLE001
+        # This is called from the submitter loop. An announcement that cannot
+        # be written is a lost message; an announcement that raises takes the
+        # submitter down with it — and the submitter is what the announcement
+        # was trying to save.
+        print(f"!! could not post an announcement about {why or kind} "
+              f"({type(e).__name__}: {e}); it said: {text[:160]}", flush=True)
+        return
     if r.startswith("[rejected]"):
         print(f"!! the board refused a harness announcement about "
               f"{why or kind}: {r}", flush=True)
@@ -886,6 +895,112 @@ def scored_candidates(ws: Path, names: list[str]) -> dict[str, float]:
             except Exception:  # noqa: BLE001
                 pass
     return out
+
+
+def frac_of(budget: Budget) -> float:
+    return 1.0 - max(budget.remaining(), 0) / max(budget.deadline_s, 1)
+
+
+_TOLD = {"reality": 0.0}
+
+
+def check_reality(slug: str, budget: Budget, frac: float) -> None:
+    """Ask Kaggle what it actually has from us, and complain if that is nothing.
+
+    The harness could report a wholly healthy run — agents working, board
+    filling, candidates scored, cost inside budget, no drift — while the only
+    externally verifiable output stayed at zero, because nothing ever asked the
+    one question that defines success. Today it stayed at zero three times.
+    """
+    if frac < 0.4 or frac - _TOLD["reality"] < 0.2:
+        return
+    _TOLD["reality"] = frac
+    try:
+        n = kaggle_submission_count(slug)
+    except Exception:  # noqa: BLE001
+        return
+    if n == 0:
+        print(f"\n!! {frac:.0%} of the window gone and Kaggle has ZERO "
+              f"submissions from us. Whatever the harness believes, that is "
+              f"the number that counts.\n", flush=True)
+        announce("Kaggle has no submission from us at all. If you are holding "
+                 "something back, stop holding it back.", kind="env",
+                 why="zero submissions")
+
+
+def kaggle_submission_count(slug: str) -> int:
+    """How many submissions Kaggle says we have. Not our counter — theirs."""
+    from kaggle.api.kaggle_api_extended import KaggleApi
+    api = KaggleApi()
+    api.authenticate()
+    return len(api.competition_submissions(slug) or [])
+
+
+def final_flush(ws: Path, args, names: list[str], budget: Budget,
+                trace: Tracer) -> None:
+    """The last act: if Kaggle has nothing from us, send the best thing we have.
+
+    No gate applies here. Every gate exists to spend a scarce slot wisely, and
+    a slot that is never spent is worth nothing at all — so once the window is
+    over, the only question left is whether Kaggle has anything from us, and if
+    it does not, the answer is to send.
+    """
+    try:
+        already = kaggle_submission_count(args.slug)
+    except Exception as e:  # noqa: BLE001
+        print(f"  [final] could not ask Kaggle ({e}); trying anyway", flush=True)
+        already = 0
+    if already:
+        print(f"  [final] Kaggle has {already} submission(s) from us — nothing "
+              f"left to rescue", flush=True)
+        return
+
+    scored = scored_candidates(ws, names)
+    best = best_of(ws, scored)
+    if best is None:
+        print("  [final] Kaggle has nothing from us and there is no scored "
+              "candidate to send. Nothing can rescue this run.", flush=True)
+        trace.log("final_flush", sent=False, reason="no candidate")
+        return
+
+    print(f"\n  [final] window closed with ZERO submissions on Kaggle. Sending "
+          f"{best['candidate']} (OOF {best['mean']:.5f}) unconditionally — a "
+          f"late submission still scores, an unsent one never does.", flush=True)
+    ctx = R.Ctx(workspace=ws, slug=args.slug, budget=budget, trace=trace)
+    msg = (f"harness final flush: {best['candidate']} OOF {best['mean']:.5f}, "
+           f"sent after the window because Kaggle had nothing from us")
+    try:
+        res = str(send_candidate(ws, best["candidate"],
+                                 ws / best["candidate"] / "out" / "submission.csv",
+                                 msg, ctx, trace, budget=budget, final=True))
+    except Exception as e:  # noqa: BLE001
+        res = f"[final flush error] {type(e).__name__}: {e}"
+    print(f"  [final] {res[:300]}", flush=True)
+    trace.log("final_flush", sent=True, candidate=best["candidate"],
+              mean=best["mean"], result=res[:300])
+
+
+_REFUSALS: dict[str, int] = {}
+
+
+def note_refusal(why: str, trace: Tracer, frac: float) -> None:
+    """Say it once, then again when it has gone on long enough to matter."""
+    n = _REFUSALS[why] = _REFUSALS.get(why, 0) + 1
+    if n == 1 or n % 10 == 0:
+        print(f"  [submit] not sending: {why} (x{n})", flush=True)
+        trace.log("submit_refused", reason=why, times=n, frac=round(frac, 2))
+    if n == 10:
+        announce(f"the submitter has declined {n} times for the same reason: "
+                 f"{why}", kind="env", why="submitter stuck")
+
+
+def best_of(ws: Path, scored: dict[str, float]) -> dict | None:
+    """The best candidate that exists right now, with a submission to send."""
+    ranked = sorted(scored.items(), key=lambda kv: -kv[1])
+    for name, mean in ranked:
+        if (ws / name / "out" / "submission.csv").exists():
+            return {"candidate": name, "mean": mean, "std": 0.0}
+    return None
 
 
 def should_submit(*, n_scored: int, frac: float, best: dict | None,
@@ -1122,7 +1237,7 @@ async def clear_for_submission(ws: Path, cand: str, args, trace: Tracer,
 
 def send_candidate(ws: Path, candidate: str, csv: Path, msg: str, ctx,
                    trace: Tracer, poll_s: int = 20,
-                   budget: Budget | None = None) -> str:
+                   budget: Budget | None = None, final: bool = False) -> str:
     """Send one candidate, by whichever route this competition actually accepts.
 
     IOAI proper is kernel-only — the submitted script has to train in-kernel —
@@ -1159,8 +1274,17 @@ def send_candidate(ws: Path, candidate: str, csv: Path, msg: str, ctx,
     # What actually has to happen before the deadline is the `submit` call —
     # the organisers confirmed scoring may finish after it — so wait as long as
     # there is time to still submit, and no longer.
-    left = (budget.remaining() if budget else 3600) - SUBMIT_RESERVE_S
-    waits = max(3, int(min(KERNEL_MAX_S, left) / poll_s))
+    # The guard below asks "is there time to push a kernel and still submit
+    # before our window closes". On the final flush the window has already
+    # closed, so the honest answer is no — and taking that answer would mean
+    # the rescue path skips itself at the exact moment it exists for. Kaggle
+    # accepts late submissions; the only clock that matters here is the
+    # kernel's own.
+    if final:
+        left, waits = KERNEL_MAX_S, int(KERNEL_MAX_S / poll_s)
+    else:
+        left = (budget.remaining() if budget else 3600) - SUBMIT_RESERVE_S
+        waits = max(3, int(min(KERNEL_MAX_S, left) / poll_s))
     if left <= 0:
         return (f"[skipped] {(budget.remaining() if budget else 0)/60:.0f} min "
                 f"left, not enough to push a kernel and still submit in time")
@@ -1239,7 +1363,21 @@ async def submitter(ws: Path, args, names: list[str], budget: Budget,
     while True:
         await asyncio.sleep(args.submit_poll_seconds)
         if budget.remaining() <= 0:
+            # The window closing is not a reason to stop trying. Kaggle takes
+            # late submissions, the quota does not expire with our clock, and
+            # this loop used to simply `return` here — leaving `finalize` to
+            # print "no submission was made — push it by hand", which is the
+            # one outcome a system whose whole promise is "a human only presses
+            # start" must never produce. Three runs ended that way today.
+            await asyncio.to_thread(final_flush, ws, args, names, budget, trace)
             return
+        # Ground truth, on a timer. Everything else here is a file we wrote
+        # ourselves: budget.submissions is our own counter, LKG is our own
+        # state, --deadline-min is our own parameter. All three were wrong
+        # today and all three have the same authority one call away.
+        if budget.submissions == 0:
+            await asyncio.to_thread(check_reality, args.slug, budget,
+                                    frac_of(budget))
         if not budget.can_submit():
             continue
         if not ((ws / "metric.py").exists() and (ws / "folds.json").exists()):
@@ -1247,18 +1385,31 @@ async def submitter(ws: Path, args, names: list[str], budget: Budget,
 
         scored = scored_candidates(ws, names)
         frac = 1.0 - max(budget.remaining(), 0) / max(budget.deadline_s, 1)
-        st = json.loads((ws / "LKG" / "state.json").read_text()) \
-            if (ws / "LKG" / "state.json").exists() else {}
-        best = (st or {}).get("local")
+        # `best` used to be read from LKG/state.json, which only `promote_all`
+        # writes and which only runs at a round boundary. Three solvers spent
+        # twenty-four minutes inside their first round — max_turns is 250 — so
+        # no boundary ever came, LKG stayed empty, and this loop concluded "no
+        # scored candidate yet" every sixty seconds while the line above had
+        # already measured solver_a at 0.914. Choose from what we just computed;
+        # LKG is a fallback for the candidate whose files have since moved on.
+        best = best_of(ws, scored)
+        if best is None and (ws / "LKG" / "state.json").exists():
+            best = (json.loads((ws / "LKG" / "state.json").read_text())
+                    or {}).get("local")
         ok, why = should_submit(
             n_scored=len(scored), frac=frac, best=best, sent_best=sent_best,
             sent=budget.submissions, allowance=budget.max_submissions,
             min_candidates=args.min_candidates,
             fallback_frac=args.submit_fallback_frac)
         if not ok:
+            # A refusal nobody records is a refusal nobody can notice. This
+            # loop declined once a minute for twenty-four minutes and the
+            # monitor showed `blocked: []` the whole time.
+            note_refusal(why, trace, frac)
             continue
-        csv = ws / "LKG" / "local" / "out" / "submission.csv"
+        csv = ws / best["candidate"] / "out" / "submission.csv"
         if not csv.exists():
+            note_refusal(f"{best['candidate']} has no submission.csv", trace, frac)
             continue
 
         msg = (f"harness: {best['candidate']} OOF {best['mean']:.5f} "

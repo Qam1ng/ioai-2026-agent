@@ -776,6 +776,73 @@ def test_env_failure() -> None:
     M.BROKEN.clear()
 
 
+def test_last_act() -> None:
+    """Why three runs produced results and not one submission.
+
+    The submitter chose `best` from a file a different subsystem writes at a
+    boundary that never came; it declined once a minute for twenty-four minutes
+    without recording a word; and when the window closed it returned, leaving
+    `finalize` to print "no submission was made — push it by hand" at a system
+    whose whole promise is that a human only presses start.
+    """
+    print("\n[the last act]")
+    from native import main as M
+
+    ws = Path(tempfile.mkdtemp(prefix="lastact-"))
+    for n, txt in (("solver_a", "x"), ("solver_b", "x")):
+        (ws / n / "out").mkdir(parents=True)
+    (ws / "solver_a" / "out" / "submission.csv").write_text("id,y\n1,0\n")
+
+    # best comes from what was just measured, not from LKG
+    best = M.best_of(ws, {"solver_a": 0.91, "solver_b": 0.95})
+    check("the higher score wins when it can be sent", best["candidate"], "solver_a")
+    check("  because solver_b has no submission.csv to send",
+          (ws / "solver_b" / "out" / "submission.csv").exists(), False)
+    (ws / "solver_b" / "out" / "submission.csv").write_text("id,y\n1,0\n")
+    check("once it can, the higher score wins",
+          M.best_of(ws, {"solver_a": 0.91, "solver_b": 0.95})["candidate"],
+          "solver_b")
+    check("no candidate at all is None", M.best_of(ws, {}), None)
+
+    src = Path("native/main.py").read_text()
+    check("the submitter no longer reads LKG first",
+          "best = best_of(ws, scored)" in src, True)
+
+    # a refusal is recorded, and repetition escalates
+    M._REFUSALS.clear()
+    from native import facts as _f
+    _f.init(ws, day_file=str(ws / "day.jsonl"))
+    tr = M.Tracer(ws / "t.jsonl")
+    for _ in range(10):
+        M.note_refusal("no scored candidate yet", tr, 0.3)
+    logged = [json.loads(x) for x in (ws / "t.jsonl").read_text().splitlines()]
+    check("a refusal is recorded, not swallowed", len(logged) >= 2, True)
+    check("  and repetition is counted", logged[-1]["times"], 10)
+
+    # the window closing is not the end of trying
+    check("the window closing triggers a flush, not a return",
+          "await asyncio.to_thread(final_flush" in src, True)
+    check("the flush asks Kaggle, not our own counter",
+          "already = kaggle_submission_count(args.slug)" in src, True)
+    check("and it is not blocked by the window it comes after",
+          "if final:\n        left, waits = KERNEL_MAX_S" in src, True)
+
+    # success is defined outside the system
+    check("ground truth is checked while the run is still live",
+          "def check_reality" in src
+          and "of the window gone and Kaggle has ZERO" in src, True)
+    check("  and it asks Kaggle for the count, not our own counter",
+          "def kaggle_submission_count" in src
+          and "api.competition_submissions(slug)" in src, True)
+
+    # The alarm must not be able to kill what it is alarming about.
+    _f.init(ws / "gone" / "deeper", day_file=str(ws / "gone" / "d.jsonl"))
+    import shutil
+    shutil.rmtree(ws / "gone")
+    M.announce("the board is unreachable", kind="env", why="test")
+    check("an announcement that cannot be written does not raise", True, True)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         ws = Path(td)
@@ -794,6 +861,7 @@ def main() -> int:
     test_supervision()
     test_kernel_route()
     test_env_failure()
+    test_last_act()
     print("\n" + ("ALL PASS" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
     return 1 if FAIL else 0
 
