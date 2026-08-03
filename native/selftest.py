@@ -663,6 +663,11 @@ def test_supervision() -> None:
     check("bypass check tolerates an unreachable API", d, None)
     check("cost overrun caught", rec.cost(19.05, 15.0).kind, "cost-overrun")
     check("cost within cap is quiet", rec.cost(14.0, 15.0), None)
+    # The GPU probe reads the real nvidia-smi, so on a box with someone else's
+    # job running it reports a genuine trespass and this test would be asserting
+    # against the machine rather than the code. Same failure as pointing the
+    # orphan check at /tmp: it passed on the server and failed on the laptop.
+    rec.gpus = lambda: None  # type: ignore[method-assign]
     first = rec.sweep(counted=0, spent=19.05, cap=15.0)
     check("drift reported once", [x.kind for x in first], ["cost-overrun"])
     check("  not repeated every sweep", rec.sweep(0, 19.05, 15.0), [])
