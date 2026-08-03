@@ -57,6 +57,15 @@ first practice task (**Audio Classifier**, a class-incremental learning problem)
 
 Full design rationale: [DESIGN.md](DESIGN.md). Team onboarding: [docs/READING.md](docs/READING.md).
 
+### Decoupled Search subsystem
+
+The independently runnable task-analysis and native web-research stage lives in
+[`search_system/`](search_system/). It preserves a byte-exact snapshot of the
+organizer-provided assets, lets one Analyst dynamically dispatch zero to four
+non-overlapping Research Agents, resumes the same Analyst session for synthesis,
+and stores every prompt and JSONL trajectory. See the
+[Chinese operator guide](search_system/README.md).
+
 ## How it works
 
 ```

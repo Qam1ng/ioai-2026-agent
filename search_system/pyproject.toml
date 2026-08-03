@@ -1,0 +1,16 @@
+[project]
+name = "ioai-search-agent-system"
+version = "0.1.0"
+description = "IOAI task-analysis and native web-research multi-agent subsystem"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+ioai-search = "ioai_agent_system.search_cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
