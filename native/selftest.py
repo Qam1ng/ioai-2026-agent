@@ -823,7 +823,13 @@ def test_last_act() -> None:
     check("the window closing triggers a flush, not a return",
           "await asyncio.to_thread(final_flush" in src, True)
     check("the flush asks Kaggle, not our own counter",
-          "already = kaggle_submission_count(args.slug)" in src, True)
+          "already = kaggle_submission_count(args.slug, since=START" in src, True)
+    # "has this competition ever had a submission" is true after a rerun, a
+    # teammate's attempt, or a human sending one by hand — and each of those
+    # would silently switch the rescue off.
+    check("  and only counts what THIS run got through",
+          'def kaggle_submission_count(slug: str, since: float | None' in src,
+          True)
     check("and it is not blocked by the window it comes after",
           "if final:\n        left, waits = KERNEL_MAX_S" in src, True)
 

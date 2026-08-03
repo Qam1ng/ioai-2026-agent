@@ -902,6 +902,8 @@ def frac_of(budget: Budget) -> float:
 
 
 _TOLD = {"reality": 0.0}
+# When this run began, so "did we submit" means this run and not all history.
+START = {"t": time.time()}
 
 
 def check_reality(slug: str, budget: Budget, frac: float) -> None:
@@ -916,7 +918,7 @@ def check_reality(slug: str, budget: Budget, frac: float) -> None:
         return
     _TOLD["reality"] = frac
     try:
-        n = kaggle_submission_count(slug)
+        n = kaggle_submission_count(slug, since=START["t"])
     except Exception:  # noqa: BLE001
         return
     if n == 0:
@@ -928,12 +930,36 @@ def check_reality(slug: str, budget: Budget, frac: float) -> None:
                  why="zero submissions")
 
 
-def kaggle_submission_count(slug: str) -> int:
-    """How many submissions Kaggle says we have. Not our counter — theirs."""
+def kaggle_submission_count(slug: str, since: float | None = None) -> int:
+    """How many submissions Kaggle says we have. Not our counter — theirs.
+
+    `since` matters more than it looks. "Has this competition ever received a
+    submission from this account" is the wrong question: it is true after a
+    rerun, after a teammate's attempt, and after a human sends one by hand —
+    and each of those silently disables the rescue this number exists to
+    trigger. The question is whether *this run* got anything through.
+    """
+    from datetime import timezone
+
     from kaggle.api.kaggle_api_extended import KaggleApi
     api = KaggleApi()
     api.authenticate()
-    return len(api.competition_submissions(slug) or [])
+    subs = api.competition_submissions(slug) or []
+    if since is None:
+        return len(subs)
+    n = 0
+    for sub in subs:
+        d = getattr(sub, "date", None)
+        if d is None:
+            continue
+        try:
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=timezone.utc)
+            if d.timestamp() >= since:
+                n += 1
+        except Exception:  # noqa: BLE001
+            continue
+    return n
 
 
 def final_flush(ws: Path, args, names: list[str], budget: Budget,
@@ -946,7 +972,7 @@ def final_flush(ws: Path, args, names: list[str], budget: Budget,
     it does not, the answer is to send.
     """
     try:
-        already = kaggle_submission_count(args.slug)
+        already = kaggle_submission_count(args.slug, since=START["t"])
     except Exception as e:  # noqa: BLE001
         print(f"  [final] could not ask Kaggle ({e}); trying anyway", flush=True)
         already = 0
@@ -1763,6 +1789,7 @@ def finalize(ws: Path, args, budget: Budget, trace: Tracer) -> None:
 
 async def run(args) -> None:
     _load_dotenv()
+    START["t"] = time.time()
     ws = ROOT / "workspace" / f"hearsay-{args.slug}"
     if args.solvers == 1:
         names = ["solver_solo"]
