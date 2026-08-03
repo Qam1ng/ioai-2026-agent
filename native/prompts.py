@@ -50,6 +50,12 @@ yourself where you think this competition is actually won, and go after it.
   number that counts is the one `native/scripts/evaluate.py` produces.
 - `out/submission.csv` — a valid submission, in the exact format the
   reconnaissance recorded on the facts board.
+- `out/kernel/` — a pushable kernel directory (`script.py` +
+  `kernel-metadata.json`), unless the board says plainly that this competition
+  takes a CSV. If the mode is unknown, build it: the API cannot see private
+  competitions and every real task is one, so unknown means assume kernel-only.
+  A candidate without this cannot be submitted to a code competition however
+  good its score — that is how a 0.896 candidate went nowhere on the last run.
 - Never invent your own validation split. `folds.json` is frozen, shared, and
   the only split anyone is scored on. Our worst historical failure was local CV
   0.9156 collapsing to 0.78095 on the leaderboard, from exactly this.
@@ -165,19 +171,36 @@ written its findings there, and anything you post with `fact_post` at
 `layer='day'` (which accelerator works, package versions, quota burn rate) is
 inherited by the next problem of the day."""
 
-FIRST = """Begin. `kaggle_overview` first — it is the authoritative task
-statement — then the data. `recon.md` and the facts board already hold what the
-deterministic reconnaissance found before you started; read them before you
-form a plan.
+# The organisers specify the exact wording that starts and continues an agent,
+# and describe the launch as a task-agnostic system prompt plus simple per-task
+# start/continue prompts. The contract above is the system prompt; these two are
+# theirs, verbatim, with only operational state appended — the budget the
+# harness is enforcing, and a nudge about experiment cost that costs nothing to
+# carry.
 
-{budget}"""
+OFFICIAL_FIRST = """Solve the Kaggle competition {slug}.
+Follow your system instructions to guide you on how to solve this.
+Do not violate the competition rules, especially those in "Kaggle CLI Submission".
+"""
 
-CONTINUE = """Continue.
+OFFICIAL_CONTINUE = """Continue solving the Kaggle competition {slug}.
+Follow your system instructions to guide you on how to solve this.
+Do not violate the competition rules, especially those in "Kaggle CLI Submission"
+"""
+
+FIRST = OFFICIAL_FIRST + """
+{budget}
+
+`recon.md` and the board already carry what the deterministic reconnaissance
+found before you started. Read them before forming a plan.
+"""
+
+CONTINUE = OFFICIAL_CONTINUE + """
+{budget}
 
 Worth knowing, from a team that measured it: run experiments at the smallest
 cost that can answer the question — a ~60s smoke run to kill obvious breakage,
 a ~180s proxy run to judge whether a direction is alive, a ~600s full run only
 to confirm one that is. Change one thing at a time; when a direction fails twice
-in a row, drop it or roll back rather than pushing harder.
-
-{budget}"""
+in a row, drop it rather than pushing harder.
+"""

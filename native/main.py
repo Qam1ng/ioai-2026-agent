@@ -359,7 +359,7 @@ async def run_solver(solver: str, ws: Path, args, budget: Budget,
                         break
 
                     tmpl = FIRST if rnd == 1 and life == 1 else CONTINUE
-                    prompt = tmpl.format(budget=budget_line(budget))
+                    prompt = tmpl.format(slug=args.slug, budget=budget_line(budget))
                     if stalled >= 2:
                         prompt += NUDGE
                         trace.log("nudge", solver=solver, round=rnd)
@@ -630,6 +630,28 @@ async def run_evaluator(ws: Path, args, budget: Budget, trace: Tracer) -> None:
         # the gate is watched exactly like the solvers, because a gate that
         # hangs is a way to score zero rather than a way to avoid a bad score.
         await review_loop(ws, args, budget, trace)
+
+
+def announce(text: str, kind: str = "env", why: str = "") -> None:
+    """Put something on the board, and complain loudly if it does not land.
+
+    The board rejects anything over 300 characters — a rule written for agents,
+    to stop status reports arriving dressed as facts. The harness then wrote a
+    356-character announcement of its own and never checked the return value, so
+    the single most important line of a run — that the competition was
+    kernel-only and solvers had to build `out/kernel/` — was dropped in silence.
+    Three solvers spent two hours producing candidates that could not be sent.
+    """
+    text = " ".join(str(text).split())
+    if len(text) > facts.MAX_TEXT:
+        print(f"!! announcement about {why or kind} is {len(text)} chars, over "
+              f"the board's {facts.MAX_TEXT} — truncating. Say it shorter.",
+              flush=True)
+        text = text[:facts.MAX_TEXT - 1]
+    r = facts.board().post(kind, text, src="harness")
+    if r.startswith("[rejected]"):
+        print(f"!! the board refused a harness announcement about "
+              f"{why or kind}: {r}", flush=True)
 
 
 def data_present(ws: Path) -> bool:
@@ -995,6 +1017,13 @@ def send_candidate(ws: Path, candidate: str, csv: Path, msg: str, ctx,
 
     kdir = ws / candidate / "out" / "kernel"
     if not (kdir / "kernel-metadata.json").exists():
+        # Tell them. The harness knew for two hours why it could not submit and
+        # kept it in a log nobody reads; the solvers went on polishing a score
+        # that had no route to the leaderboard.
+        announce(f"{candidate} cannot be submitted: this is a code competition "
+                 f"and it has no out/kernel/kernel-metadata.json. Build the "
+                 f"kernel dir — see skill kaggle-submission.", kind="format",
+                 why="missing kernel dir")
         return f"[skip] {candidate} has no out/kernel/kernel-metadata.json"
 
     # A kernel may run for up to thirty minutes. Waiting only ten, as this did,
@@ -1342,16 +1371,13 @@ def bootstrap(ws: Path, args, budget: Budget, trace: Tracer) -> None:
         note = (f"This competition is kernel-only: submissions must come from a "
                 f"notebook that trains in-kernel. Daily limit: {limit}.")
     else:
-        note = ("Could not determine the submission mode — the API does not "
-                "list private competitions, which is what the real tasks are. "
-                "Treat this as kernel-only and produce `out/kernel/`: the task "
-                "description carries the wheel dataset to mount and the "
-                "setup_ioai_env block the script must start with. Write "
-                "out/submission.csv as well, in case a CSV is accepted after "
-                "all.")
+        note = ("Submission mode unknown — the API cannot see private "
+                "competitions and every real task is one. Treat this as "
+                "kernel-only: build out/kernel/, with the wheel dataset and "
+                "setup_ioai_env block the task description specifies.")
     SUBMIT_MODE["mode"] = mode
     print(f"[boot] submission mode: {mode} (daily limit {limit})", flush=True)
-    facts.board().post("format", note, src="harness")
+    announce(note, kind="format", why="submission mode")
     run_recon(ws)
 
 

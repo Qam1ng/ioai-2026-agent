@@ -68,6 +68,23 @@ def test_facts(ws: Path) -> None:
     check("so may the evaluator",
           b.post("result", "approach Y -> 0.79", "evaluator")[:8], "[posted]")
 
+    # The cap is there to stop agents narrating, and an agent that trips it can
+    # read the rejection and repost shorter. A script cannot. The harness
+    # announced "this competition is kernel-only, build out/kernel/" in 356
+    # characters, never inspected the rejection it got back, and three solvers
+    # spent a full run producing candidates with no route to the leaderboard.
+    # For machine sources the cap now truncates, loudly, instead of dropping.
+    d = ws / "trunc"
+    b2 = facts.init(d, day_file=str(d / "day.jsonl"))
+    check("over-long from a solver is still refused",
+          b2.post("format", "y" * 400, "solver_a")[:10], "[rejected]")
+    check("over-long from the harness lands anyway",
+          b2.post("format", "y" * 400, "harness")[:8], "[posted]")
+    check("...truncated, not dropped",
+          [len(f["text"]) for f in b2.unseen("reader")], [facts.MAX_TEXT - 1])
+    check("same for recon", b2.post("data", "z" * 400, "recon")[:8], "[posted]")
+    facts.init(ws, day_file=str(ws / "day.jsonl"))  # restore for later tests
+
 
 def test_pipeline(ws: Path) -> None:
     print("\n[folds -> evaluate -> promote]")
@@ -636,7 +653,12 @@ def test_supervision() -> None:
     check("silence is measured", 290 < S.stalled_for("solver_c") < 310, True)
     check("an agent never seen is not called stalled", S.stalled_for("nobody"), 0.0)
 
-    rec = S.Reconciler(ws=Path("/tmp"), slug="x", allowed_gpus={"4", "5"})
+    # A directory nothing can be running out of. Pointing this at /tmp made the
+    # orphan check count whatever the machine happened to have there, so the
+    # suite passed on one box and failed on another.
+    import tempfile as _tf
+    _iso = Path(_tf.mkdtemp(prefix="recon-iso-"))
+    rec = S.Reconciler(ws=_iso, slug="x", allowed_gpus={"4", "5"})
     d = rec.submissions(counted=0)
     check("bypass check tolerates an unreachable API", d, None)
     check("cost overrun caught", rec.cost(19.05, 15.0).kind, "cost-overrun")

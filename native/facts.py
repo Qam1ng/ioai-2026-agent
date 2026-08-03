@@ -39,6 +39,9 @@ from pathlib import Path
 KINDS = ("env", "data", "format", "failure", "claim", "result")
 VERIFIED_ONLY = ("result",)
 TRUSTED = ("harness", "evaluator", "recon")
+# Of the trusted sources, these two are scripts rather than agents: nothing on
+# the other end of a rejection can read it and try again. See `post`.
+MACHINE = ("harness", "recon")
 MAX_TEXT = 300
 LAYERS = ("task", "day")
 
@@ -66,8 +69,21 @@ class Board:
         if not text:
             return "[rejected] empty text"
         if len(text) > MAX_TEXT:
-            return (f"[rejected] {len(text)} chars > {MAX_TEXT}. Post the fact, "
-                    "not the narrative. Split it or cut it down.")
+            # The cap exists to stop agents narrating. A machine source cannot
+            # read a rejection and try again shorter, so for those the cap has
+            # to bend rather than drop: the harness once announced "this
+            # competition is kernel-only, build out/kernel/" in 356 characters,
+            # got a rejection string it never inspected, and three solvers spent
+            # a whole run producing candidates with no route to the leaderboard.
+            # Losing the tail of a fact is survivable; losing the fact is not.
+            if src in MACHINE:
+                print(f"!! {src} posted {len(text)} chars, over the board's "
+                      f"{MAX_TEXT} — truncated. Say it shorter: {text[:80]}...",
+                      flush=True)
+                text = text[:MAX_TEXT - 1]
+            else:
+                return (f"[rejected] {len(text)} chars > {MAX_TEXT}. Post the "
+                        "fact, not the narrative. Split it or cut it down.")
         rec = {"ts": int(time.time()), "layer": layer, "kind": kind,
                "src": src, "text": text}
         # Append-only: O_APPEND writes of a single short line are atomic enough
