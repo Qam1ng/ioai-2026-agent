@@ -682,6 +682,40 @@ def submission_mode(slug: str) -> tuple[str, int]:
     return "unknown", 0
 
 
+def submissions_remaining(slug: str) -> int | None:
+    """Submissions still allowed today, or None if it cannot be established.
+
+    Note this is *remaining*, already net of what has been sent — not a daily
+    total to subtract usage from. Mixing the two is easy and would silently
+    halve the allowance.
+
+    `competitions_list` cannot see private competitions, so the limit it
+    reports for a real task is zero — and a zero limit quietly collapsed the
+    run's allowance to whatever `--max-submissions` happened to default to. One
+    run planned for three submissions against a true allowance of fifty, and
+    nothing in the log said the number was a guess.
+
+    `competitions submission-limits` does answer for private competitions, and
+    the task statement names it outright. It is CLI-only — there is no Python
+    binding — which is how a probe written against the API missed it.
+    """
+    import re
+    import subprocess
+    try:
+        r = subprocess.run([R._kaggle_bin(), "competitions",
+                            "submission-limits", slug],
+                           capture_output=True, text=True, timeout=90)
+        m = re.search(r"Remaining today:\s*(\d+)", r.stdout or "")
+        if m:
+            return int(m.group(1))
+        why = ((r.stdout or "") + (r.stderr or "")).strip()[:200]
+    except Exception as e:  # noqa: BLE001
+        why = f"{type(e).__name__}: {e}"
+    print(f"!! could not read today's submission limit ({why}) — falling back "
+          f"to --max-submissions, which is a guess, not the quota", flush=True)
+    return None
+
+
 def submissions_used_today(slug: str) -> int:
     """How much of today's quota is already gone.
 
@@ -1477,11 +1511,24 @@ async def run(args) -> None:
 
     _, limit = submission_mode(args.slug)
     used = submissions_used_today(args.slug)
-    allowance = min(args.max_submissions, max(0, limit - used) if limit else
-                    args.max_submissions)
-    QUOTA.update({"limit": limit, "used_today": used, "sent": []})
-    print(f"[boot] submission quota: {used}/{limit} already used today -> "
-          f"this run may send {allowance}", flush=True)
+    # What Kaggle says is left, asked directly. Falling back to the public-API
+    # total minus our own count only matters for the 2025 mirrors; for a real
+    # (private) task the CLI is the only path that answers at all.
+    left = submissions_remaining(args.slug)
+    if left is None:
+        left = max(0, limit - used) if limit else None
+    # --max-submissions is a ceiling we may impose on ourselves, not the quota.
+    # It used to be the only number in play, so when the quota probe returned
+    # nothing its default silently *became* the quota: a run with fifty
+    # submissions available planned for three.
+    allowance = left if left is not None else args.max_submissions
+    if args.max_submissions:
+        allowance = min(allowance, args.max_submissions)
+    QUOTA.update({"limit": left, "used_today": used, "sent": []})
+    src = "kaggle says" if left is not None else "no quota reading — guessing"
+    print(f"[boot] submissions: {src} {left if left is not None else '?'} left "
+          f"today ({used} sent already) -> this run may send {allowance}",
+          flush=True)
 
     budget = Budget(deadline_s=args.deadline_min * 60,
                     max_submissions=allowance,
@@ -1582,9 +1629,10 @@ def main() -> None:
     ap.add_argument("--solvers", type=int, default=3,
                     help="1 = the control (kernel ceiling, no board)")
     ap.add_argument("--deadline-min", type=float, default=120)
-    ap.add_argument("--max-submissions", type=int, default=3,
-                    help="ceiling for this run; the real allowance is this "
-                         "capped by what the daily quota has left")
+    ap.add_argument("--max-submissions", type=int, default=0,
+                    help="optional ceiling on top of the daily quota; 0 (the "
+                         "default) means let the quota decide. Only used as "
+                         "the allowance itself when the quota cannot be read")
     ap.add_argument("--min-candidates", type=int, default=3,
                     help="scored candidates required before the harness spends "
                          "the first submission")
