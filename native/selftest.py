@@ -668,6 +668,59 @@ def test_supervision() -> None:
     check("  not repeated every sweep", rec.sweep(0, 19.05, 15.0), [])
 
 
+def test_kernel_route() -> None:
+    """The five defects that made the timed-deps run submit nothing.
+
+    All of them were invisible: each component reported success, and the run
+    died between them. They are pinned here because every one was found by
+    asking Kaggle a question our own logs had already answered wrongly.
+    """
+    print("\n[the kernel route]")
+    import re
+    from native import main as M
+
+    # 1. The ref came out of the URL, not the kernel. `com/code` is a real
+    #    kernel-shaped string sitting in every push response Kaggle sends.
+    push = ("Kernel version 1 successfully pushed.  Please check progress at "
+            "https://www.kaggle.com/code/qam1ng/ioai-t1-timeddeps-12-solver-a")
+    check("the old naive pattern really did find com/code",
+          re.search(r"([\w-]+/[\w-]+)", push).group(1), "com/code")
+    check("the URL pattern finds the kernel",
+          re.search(r"kaggle\.com/code/([\w-]+/[\w-]+)", push).group(1),
+          "qam1ng/ioai-t1-timeddeps-12-solver-a")
+    src = Path("native/main.py").read_text()
+    check("and the ref is taken from the metadata we pushed",
+          'meta.get("id")' in src, True)
+    check("a ref we cannot establish is not polled anyway",
+          "not polling a guess" in src, True)
+
+    # 2. Every gate that can refuse needs a point past which it cannot. REJECT
+    #    was the last one without one.
+    check("REJECT has a time floor now", "reject_overridden" in src, True)
+    check("  and it still needs the mechanical checks to pass",
+          'args.submit_fallback_frac and mech.get("ok")' in src, True)
+
+    # 3. The evaluator settled a question about Kaggle by grepping our own log.
+    check("the evaluator is told to ask Kaggle, not the trace",
+          "ANYTHING ABOUT KAGGLE, ASK KAGGLE" in M.REVIEW, True)
+    check("  with the reason it matters",
+          "not evidence of absence" in M.REVIEW, True)
+
+    # 4. That log truncated the commands it was being asked to prove things by.
+    check("the trace keeps enough of a command to be evidence",
+          '[:2000]' in src and '[:200])' not in src, True)
+
+    # 5. A previous run's raw board is not a source; memory_recall is.
+    pat = r"(IOAI2026-agent/)?archive/\d{4}-\d{2}-\d{2}"
+    check("an archive of a past run is denied",
+          bool(re.search(pat, "ls -R /home/qyan/IOAI2026-agent/archive/"
+                              "2026-08-03_timeddeps_attempt1/")), True)
+    check("  but the competition's own input/archive/ is untouched",
+          bool(re.search(pat, "ls input/archive/audio | head")), False)
+    check("  and the gate is wired into gate_bash",
+          "That is an archive of a previous run" in src, True)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         ws = Path(td)
@@ -684,6 +737,7 @@ def main() -> int:
     test_submission_mode()
     test_calibration()
     test_supervision()
+    test_kernel_route()
     print("\n" + ("ALL PASS" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
     return 1 if FAIL else 0
 

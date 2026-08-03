@@ -154,6 +154,22 @@ def opts(solver: str, ws: Path, args, budget: Budget, trace: Tracer,
                     "has scored enough candidates to choose between. Write "
                     "out/submission.csv; check mcp__ioai__submission_status for "
                     "where the shared quota stands."}}
+        # Knowledge from earlier runs travels through `memory_recall`, which is
+        # distilled and reviewed. Reading a previous run's raw board instead is
+        # not the same thing: on the timed-deps rerun a solver found the archive
+        # I had made of the attempt before it, replayed its findings onto the
+        # board as its own at minute 1.6, and the other two built on them. No
+        # rule broken — it was our own run on the same task — but the run stops
+        # being a measurement of the system, and nobody else can reproduce it.
+        if re.search(r"(IOAI2026-agent/)?archive/\d{4}-\d{2}-\d{2}", cmd):
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse", "permissionDecision": "deny",
+                "permissionDecisionReason":
+                    "That is an archive of a previous run. What earlier runs "
+                    "learned reaches you through mcp__ioai__memory_recall, "
+                    "which is distilled and checked; replaying a past board "
+                    "verbatim makes this run unreproducible for anyone who "
+                    "does not have that directory."}}
         # CUDA_VISIBLE_DEVICES is not hierarchical: a child that sets it
         # overrides the parent's restriction outright, so `CUDA_VISIBLE_DEVICES=0`
         # inside a run launched with 4,5,6,7 means physical GPU 0 — someone
@@ -174,8 +190,13 @@ def opts(solver: str, ws: Path, args, budget: Budget, trace: Tracer,
         return {}
 
     async def trace_tool(input_data, tool_use_id, context):
+        # 200 chars used to be the cap, which put the interesting half of every
+        # long Bash command out of reach. The evaluator reads this file to
+        # decide whether a kernel was ever pushed; a record that silently drops
+        # the end of commands cannot answer that, and it answered "no" while a
+        # kernel was running on Kaggle.
         trace.log("tool", solver=solver, name=input_data.get("tool_name"),
-                  input=str(input_data.get("tool_input"))[:200])
+                  input=str(input_data.get("tool_input"))[:2000])
         return {}
 
     return ClaudeAgentOptions(
@@ -503,6 +524,17 @@ A warning is not a defect until you say it is. The last run's warnings were
 "contains negative values" and "no sample_submission to compare against" — on
 that task -1 was the background label and the mirror simply shipped no sample,
 so both were correct observations and neither was a problem.
+
+ANYTHING ABOUT KAGGLE, ASK KAGGLE. `mcp__ioai__kaggle_kernel_status` and
+`mcp__ioai__kaggle_submissions` answer authoritatively in one call. Do not
+settle a question about the world by parsing `trace.jsonl`: it records what our
+agents asked for, not what happened, it does not see work the harness itself
+did, and a `grep` over it will happily match your own earlier commands echoed
+back. On the timed-deps run this exact mistake held a candidate for twelve
+minutes — "zero push calls in the entire run", re-confirmed three times, each
+re-reading raising confidence without adding information — while the kernel sat
+COMPLETE on Kaggle, pushed by the harness. Absence of evidence in a log we write
+is not evidence of absence. One status call would have settled it.
 
 Two things are yours:
 
@@ -1014,6 +1046,18 @@ async def clear_for_submission(ws: Path, cand: str, args, trace: Tracer,
                 return True, (f"hold overridden at {frac:.0%} of the window "
                               f"(evaluator wanted to wait: {reason})")[:160]
             return False, f"evaluator holding the slot: {reason}"[:160]
+        # Gate 1 had a point past which it could not refuse, and gate 3 was
+        # given one after the lack of it cost a run. HOLD got one too. REJECT
+        # never did — so an evaluator wrong about *why* it was rejecting could
+        # still run the clock out, and on the timed-deps run it spent twelve
+        # minutes rejecting a candidate whose kernel had already finished.
+        if frac >= args.submit_fallback_frac and mech.get("ok"):
+            trace.log("reject_overridden", candidate=cand, frac=round(frac, 2))
+            announce(f"{frac:.0%} of the window gone and the mechanical checks "
+                     f"pass — sending {cand} over the evaluator's rejection.",
+                     kind="env", why="reject overridden")
+            return True, (f"reject overridden at {frac:.0%}: mechanical checks "
+                          f"pass (evaluator said: {reason})")[:160]
         facts.board().post(
             "format", f"evaluator REJECTED {cand}: {reason}"[:300], src="evaluator")
         return False, f"evaluator rejected: {reason}"
@@ -1074,9 +1118,29 @@ def send_candidate(ws: Path, candidate: str, csv: Path, msg: str, ctx,
     push = str(R.kaggle_push_kernel({"kernel_dir": str(kdir)}, ctx))
     trace.log("kernel_push", candidate=candidate, out=push[:300])
     ref = ver = None
-    m = re.search(r"([\w-]+/[\w-]+)", push)
-    if m:
+    # Kaggle answers a push with a sentence and a URL:
+    #   "Kernel version 1 successfully pushed.  Please check progress at
+    #    https://www.kaggle.com/code/qam1ng/ioai-t1-timeddeps-12-solver-a"
+    # A bare `([\w-]+/[\w-]+)` finds `com/code` in that URL long before it
+    # reaches the owner and slug, so the poll below asked Kaggle about a kernel
+    # that does not exist, never saw COMPLETE, and timed out 35 minutes later
+    # while the real kernel had finished in 68 seconds. Read the slug from the
+    # path we asked for instead, and use the URL only to confirm it.
+    try:
+        meta = json.loads((kdir / "kernel-metadata.json").read_text())
+        ref = str(meta.get("id") or "").strip() or None
+    except Exception:  # noqa: BLE001
+        ref = None
+    m = re.search(r"kaggle\.com/code/([\w-]+/[\w-]+)", push)
+    if m and m.group(1) != ref:
+        # The metadata is what we asked for; the URL is what Kaggle made. If
+        # they disagree, Kaggle wins — it may have renamed a clashing slug.
+        print(f"!! kernel id {ref!r} but Kaggle returned {m.group(1)!r}; "
+              f"following Kaggle", flush=True)
         ref = m.group(1)
+    if not ref:
+        return (f"[skip] pushed {candidate} but could not work out the kernel "
+                f"ref from {push[:120]!r} — not polling a guess")
     m = re.search(r"version\s*(\d+)", push, re.I)
     if m:
         ver = int(m.group(1))
