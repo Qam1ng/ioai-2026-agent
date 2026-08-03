@@ -5,7 +5,7 @@
     cd ~/IOAI2026-agent
     export CUDA_VISIBLE_DEVICES=4,5,6,7          # only cards that are ours
     setsid nohup ~/venvs/ioai312/bin/python -u -m native.main \
-        --slug <competition> --solvers 3 \
+        --mode competition --slug <competition> --solvers 3 \
         --deadline-min 120 --max-cost-usd 100 --max-submissions 4 \
         --model claude-opus-5 --effort high \
         > run.log 2>&1 < /dev/null &
@@ -22,6 +22,24 @@ that has ever shut a run down cleanly on the first attempt.
 has left, checked at boot. Set it well under the daily cap on tight
 competitions — chicken allows five a day and a run that submits on every
 improvement will spend them all.
+
+For a test-of-record, use `--mode clean-benchmark` and a fresh workspace. That
+mode withholds leaderboard and web feedback from candidate lineages; an
+attempted audit read is recorded as permanent taint. Never reuse a competition
+workspace as clean evidence.
+
+Before accepting a run, inspect these harness-owned artifacts together:
+
+    run_contract.json
+    route_coordination.json
+    evidence/firewall.json
+    evidence/candidates/<candidate>.json
+    <candidate>/out/sample_locality_receipt.json
+
+`route_coordination.json` says whether routes actually adopted one another's
+fact IDs or merely ran independently. A valid CSV without the matching
+contract, OOF/fold hashes, locality receipt, and untainted lineage is not a
+clean benchmark result.
 
 ## Watch it
 
@@ -66,7 +84,7 @@ commands, but the launcher's own variable is what defines "ours".
 
 ## Checks
 
-    python -m native.selftest                          # 133, hand-computed
+    python -m native.selftest                          # 163, hand-computed
     python -m native.monitor --slug <slug> --json
     python -m native.scripts.checkfolds --workspace <ws>
     python -m native.scripts.integrity --candidate <s> --workspace <ws>

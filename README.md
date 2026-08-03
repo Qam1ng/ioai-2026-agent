@@ -14,11 +14,17 @@ first practice task (**Audio Classifier**, a class-incremental learning problem)
 
 Three generations live in this repo. **HearSay is the current one; use it.**
 
-    python -m native.main --slug <competition> --solvers 3 \
+    python -m native.main --mode competition --slug <competition> --solvers 3 \
         --deadline-min 120 --max-cost-usd 100 --max-submissions 4
 
 See [`native/README.md`](native/README.md) for the design and, more usefully,
 for which failure produced each decision in it.
+
+The current revision adds an **Evidence Firewall** around HearSay. Use
+`--mode competition` for a real timed run with sparse post-submission
+calibration, or `--mode clean-benchmark` to seal leaderboard and web feedback
+from every candidate lineage. Both modes freeze the model, budget, routes,
+data contract, and submission authority before work starts.
 
 | | where | status |
 |---|---|---|
@@ -59,6 +65,11 @@ Measured, not assumed:
   angle on the board. A version that pre-assigned model/data/calibration aimed
   two of three solvers at ground that had nothing in it.
 - **Scores come from scripts, never from the agent that produced them.**
+- **Claims, adoptions, conflicts, results, and decisions carry stable fact IDs
+  and evidence references.** A route cannot cite itself as “collaboration.”
+- **A candidate is not just a CSV.** OOF predictions, folds, code/config hashes,
+  sample-locality probes, coordination receipts, and taint state are sealed
+  together; a failed gate retains the last-known-good candidate.
 - **Every gate that can refuse has a point past which it cannot.** Three runs
   were lost to gates that could say no indefinitely.
 - **The leaderboard score comes back.** The run learns whether its own
@@ -132,9 +143,10 @@ which records for each decision the failure that produced it.
 | `native/facts.py` | the board — append-only, provenance-gated, two layers |
 | `native/prompts.py` | the contract appended to Claude Code's preset prompt |
 | `native/supervise.py` | drift reconciliation, stall detection, urgent delivery |
-| `native/scripts/` | recon · folds · checkfolds · evaluate · promote · check_format · integrity |
+| `native/evidence.py` | immutable run contract, clean/competition modes, taint and reveal receipts |
+| `native/scripts/` | recon · folds · evaluate · promote · integrity · coordination · sample locality · system A/B benchmark |
 | `native/monitor.py` | `./watch` — the board first, stuck gates above it |
-| `native/selftest.py` | 133 checks against hand-computed values |
+| `native/selftest.py` | 163 checks against hand-computed values |
 | `skills/validation-split/` | how to cut a split, loaded by the evaluator |
 
 ### Three things it does differently
@@ -166,10 +178,10 @@ cp .env.example .env                              # ANTHROPIC_API_KEY
 mkdir -p ~/.kaggle && printf 'KGAT_...' > ~/.kaggle/access_token
 chmod 600 ~/.kaggle/access_token
 
-python -m native.selftest                         # 133 checks, no API calls
+python -m native.selftest                         # 163 checks, no API calls
 
 export CUDA_VISIBLE_DEVICES=4,5,6,7               # only cards that are yours
-python -m native.main --slug <competition> --solvers 3 \
+python -m native.main --mode competition --slug <competition> --solvers 3 \
     --deadline-min 120 --max-cost-usd 100 --max-submissions 4
 ```
 

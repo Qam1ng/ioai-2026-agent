@@ -18,8 +18,25 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 from agent.tools import registry as R
 
 from . import facts
+from . import evidence
 
 _CTX: R.Ctx | None = None
+_MODE = "competition"
+
+_FACT_POST_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string"},
+        "text": {"type": "string"},
+        "layer": {"type": "string", "default": "task"},
+        "urgent": {"type": "boolean", "default": False},
+        "claim_key": {"type": "string", "default": ""},
+        "evidence_refs": {"type": "string", "default": ""},
+        "related_ids": {"type": "string", "default": ""},
+    },
+    "required": ["kind", "text"],
+    "additionalProperties": False,
+}
 
 _KAGGLE = [
     ("kaggle_overview", R.kaggle_overview, {},
@@ -47,9 +64,11 @@ _KAGGLE = [
 ]
 
 
-def init_ctx(workspace: Path, slug: str, budget, trace) -> None:
-    global _CTX
+def init_ctx(workspace: Path, slug: str, budget, trace,
+             mode: str = "competition") -> None:
+    global _CTX, _MODE
     _CTX = R.Ctx(workspace=workspace, slug=slug, budget=budget, trace=trace)
+    _MODE = mode
 
 
 def make_server(solver_id: str):
@@ -81,8 +100,11 @@ def make_server(solver_id: str):
             return {"content": [{"type": "text", "text": out}]}
         return run
 
+    available = [item for item in _KAGGLE
+                 if not (_MODE == "clean-benchmark"
+                         and item[0] == "kaggle_submissions")]
     tools = [tool(name, desc, schema)(wrap(fn))
-             for name, fn, schema, desc in _KAGGLE]
+             for name, fn, schema, desc in available]
 
     @tool("fact_post",
           "Put ONE thing on the shared board. kind is one of:\n"
@@ -95,6 +117,9 @@ def make_server(solver_id: str):
           "package version, a path that does not exist\n"
           "  failure — something you have CONFIRMED does not work, and why, so "
           "nobody else spends time on it\n"
+          "  conflict — two fact IDs disagree; list both in related_ids\n"
+          "  adoption — you changed direction because of another fact; list it "
+          "in related_ids\n"
           "You cannot post `result` — scores reach the board from the evaluator, "
           "computed on the shared folds, because a number measured on your own "
           "split is not comparable to anyone else's. "
@@ -105,12 +130,26 @@ def make_server(solver_id: str):
           "now — a shared assumption that turns out to be wrong, a format that "
           "voids submissions. Ordinary facts reach the others when they next "
           "call a tool, which is never for someone sitting on a long job; "
-          "urgent ones are pushed. Expect to need it once a run, if at all.",
-          {"kind": str, "text": str, "layer": str, "urgent": bool})
+          "urgent ones are pushed. Expect to need it once a run, if at all. "
+          "For a claim, provide a short stable claim_key. evidence_refs and "
+          "related_ids are comma-separated workspace-relative paths / fact IDs.",
+          _FACT_POST_SCHEMA)
     async def fact_post(args):
         layer = args.get("layer") or "task"
-        out = facts.board().post(args.get("kind", ""), args.get("text", ""),
-                                 src=solver_id, layer=layer)
+        refs = [item.strip() for item in str(args.get("evidence_refs", "")).split(",")
+                if item.strip()]
+        related = [item.strip() for item in str(args.get("related_ids", "")).split(",")
+                   if item.strip()]
+        try:
+            out = facts.board().post(
+                args.get("kind", ""), args.get("text", ""),
+                src=solver_id, layer=layer,
+                claim_key=str(args.get("claim_key", "")),
+                evidence_refs=refs, related_ids=related,
+                tainted=evidence.is_tainted(_CTX.workspace, solver_id),
+            )
+        except Exception as exc:  # noqa: BLE001 - a board write fails closed.
+            out = f"[rejected] {type(exc).__name__}: {exc}"
         if args.get("urgent") and out.startswith("[posted]"):
             from . import supervise as S
             S.flag_urgent(args.get("kind", ""), args.get("text", ""), solver_id)
@@ -153,7 +192,7 @@ def make_server(solver_id: str):
 
     tools += [fact_post, fact_read, recon, submission_status]
     server = create_sdk_mcp_server(name="ioai", version="2.1.0", tools=tools)
-    names = [f"mcp__ioai__{n}" for n, *_ in _KAGGLE]
+    names = [f"mcp__ioai__{n}" for n, *_ in available]
     names += ["mcp__ioai__fact_post", "mcp__ioai__fact_read", "mcp__ioai__recon",
               "mcp__ioai__submission_status"]
     return server, names

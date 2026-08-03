@@ -4,7 +4,7 @@ Three full-power Claude Code sessions solve a Kaggle competition in parallel,
 coordinating through one append-only facts board, with a deterministic harness
 that owns measurement and submission.
 
-    python -m native.main --slug <competition> --solvers 3 \
+    python -m native.main --mode competition --slug <competition> --solvers 3 \
         --deadline-min 120 --max-cost-usd 100 --max-submissions 4
 
 Results on the IOAI 2025 mirrors, first place on both:
@@ -36,6 +36,21 @@ submit tool. They read the task, decide where they think it is won, and write
 two files. Everything about whether those files are any good is computed
 elsewhere.
 
+## Evidence Firewall
+
+The run now starts in one of two frozen modes:
+
+- `competition` permits sparse leaderboard calibration only after a submission
+  has been sealed and sent.
+- `clean-benchmark` withholds leaderboard and web feedback from every solver;
+  an attempted audit read permanently taints that process lineage.
+
+`run_contract.json` pins the mode, model, routes, budget, deadline, and submit
+authority. Candidate promotion binds folds, OOF predictions, submission,
+code/config hashes, sample-locality probes, and the route-coordination receipt.
+Development, clean, and public LKG channels are separate: evidence cannot be
+promoted merely because a public score happened to rise.
+
 ## Agents
 
 Four independent `ClaudeSDKClient` sessions, each its own process and context.
@@ -58,17 +73,25 @@ the target is the density map's sum, which is none of those three.
 `facts.jsonl`, append-only, no LLM. Delivered at every round boundary and
 piggybacked onto tool results.
 
-    claim    the angle you are taking, so others take a different one
-    result   a score — evaluator and harness only, never a solver
-    data     a structural property: a leak, duplicates, a label anomaly
-    format   a submission trap
-    failure  something confirmed not to work, and why
-    env      an environment gotcha
+    claim     the angle you are taking, so others take a different one
+    adoption  reuse of another route's stable fact ID
+    conflict  two findings that need an explicit resolution
+    result    a score — evaluator and harness only, never a solver
+    decision  evaluator-only resolution bound to evidence
+    data      a structural property: a leak, duplicates, a label anomaly
+    format    a submission trap
+    failure   something confirmed not to work, and why
+    env       an environment gotcha
 
 `result` is provenance-gated rather than secret: a number is comparable only if
 it came from the shared folds and the frozen metric, and a self-reported one is
 not. Everything else is open, including what each direction turned out to be
 worth — withholding that only means the others keep drilling dry holes.
+
+Every record has a stable ID and a hash-chain predecessor. `adoption` must point
+to another route; self-adoption and invented references are rejected. The final
+`route_coordination.json` therefore distinguishes actual cooperation from three
+independent end-to-end races instead of inferring teamwork from shared logs.
 
 Two layers. `task` dies with the competition; `day` survives across the three
 problems of a competition day.
@@ -99,7 +122,16 @@ eighteen times while the one agent that could have said so was never asked.
     evaluate.py      scores out/oof.npy — self-reported numbers are never read
     promote.py       no-regression gate and last-known-good
     check_format.py  fatal vs "depends on rules this script does not know"
-    integrity.py     hash binding, and order-dependence detection
+    integrity.py     evidence-manifest binding and order-dependence detection
+    sample_locality.py  permutation, strict-subset, and rebatch invariance
+    coordination.py  claims/adoptions/conflicts/results/decisions audit
+    system_benchmark.py  equal-budget, reverse-order architecture A/B
+
+`chicken_timestamp_candidate.py` is a concrete task adapter for the updated
+policy: a DVR-time route is adopted per capture session only when its frozen
+leave-one-out evidence beats the visual incumbent; a failed session keeps the
+incumbent. It freezes all 300 official-image hashes, produces duplicate CSVs,
+and refuses more than one exploratory submission.
 
 `integrity.py` exists because a teammate's strongest public score on the audio
 task came from Viterbi-decoding the submission ordering — 0.86 to 0.988 with no
@@ -138,7 +170,7 @@ refusing is more likely wrong than the run is.
 
 ## Tests
 
-    python -m native.selftest     # 133 checks
+    python -m native.selftest     # 163 checks
 
 Against hand-computed values, not against themselves. If `evaluate.py` is wrong
 every downstream decision is wrong and nothing else in the system can notice.
