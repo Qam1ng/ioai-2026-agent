@@ -760,6 +760,12 @@ def test_env_failure() -> None:
         M.note_env(f"API Error 401: {text}", "solver_a")
         check(f"{text[:22]!r} is terminal", M.BROKEN.get("why"), why)
 
+    # A subscription refuses differently from an unpaid API account.
+    M.BROKEN.clear()
+    M.note_env("Claude usage limit reached. Your limit will reset at 3pm.", "s")
+    check("a subscription's usage limit is terminal for this window",
+          "usage limit is reached" in (M.BROKEN.get("why") or ""), True)
+
     src = Path("native/main.py").read_text()
     check("solvers stop instead of being nudged",
           "giving up: {BROKEN['why']}" in src, True)

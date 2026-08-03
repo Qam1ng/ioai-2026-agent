@@ -234,6 +234,16 @@ FATAL_ENV = (
     ("oauth token has expired", "the OAuth token has expired — re-run "
                                 "`claude setup-token`"),
     ("permission_error", "this key is not allowed to use the requested model"),
+    # A Claude subscription refuses differently from an unpaid API account, and
+    # it refuses on a five-hour or weekly clock. That is not terminal in the
+    # world, but it is terminal for a two-hour window: nothing the harness can
+    # do will make the limit reset before the deadline, so it is a stop, not a
+    # wait.
+    ("usage limit reached", "the Claude subscription's usage limit is reached — "
+                            "it resets on its own clock, not before this "
+                            "window ends"),
+    ("rate_limit_error", "the account is rate-limited hard enough that no agent "
+                         "is making progress"),
 )
 BROKEN: dict = {}
 
