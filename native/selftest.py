@@ -721,6 +721,50 @@ def test_kernel_route() -> None:
           "That is an archive of a previous run" in src, True)
 
 
+def test_env_failure() -> None:
+    """A run that cannot pay for a token should say so, not nudge for two hours.
+
+    The second timed-deps rerun printed `turns=1 $0.00 [no output]` forty times
+    in one minute and `stalled 39 rounds — nudging` alongside it. Nothing in the
+    harness told "made no progress" apart from "cannot possibly make progress",
+    so the only evidence of what had actually happened was one line of model
+    output scrolling past.
+    """
+    print("\n[terminal environment failures]")
+    from native import main as M
+
+    M.BROKEN.clear()
+    M.note_env("I need to think about this differently.", "solver_a")
+    check("ordinary output is not a failure", M.BROKEN, {})
+
+    M.note_env("API Error: Credit balance is too low", "solver_b")
+    check("out of credit is caught", M.BROKEN.get("why"),
+          "the Anthropic account is out of credit")
+    check("  and remembers who saw it first", M.BROKEN.get("first"), "solver_b")
+
+    seen = M.BROKEN.get("seen")
+    M.note_env("credit balance is too low", "solver_c")
+    check("a second sighting does not overwrite the first",
+          (M.BROKEN["first"], M.BROKEN["seen"]), ("solver_b", seen + 1))
+
+    for text, why in [("invalid x-api-key", "ANTHROPIC_API_KEY is not valid"),
+                      ("OAuth token has expired",
+                       "the OAuth token has expired — re-run "
+                       "`claude setup-token`")]:
+        M.BROKEN.clear()
+        M.note_env(f"API Error 401: {text}", "solver_a")
+        check(f"{text[:22]!r} is terminal", M.BROKEN.get("why"), why)
+
+    src = Path("native/main.py").read_text()
+    check("solvers stop instead of being nudged",
+          "giving up: {BROKEN['why']}" in src, True)
+    check("the evaluator stops too",
+          "budget.remaining() <= 0 or BROKEN" in src, True)
+    check("and the run does not report COMPLETE over an empty workspace",
+          "RUN ABORTED" in src, True)
+    M.BROKEN.clear()
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         ws = Path(td)
@@ -738,6 +782,7 @@ def main() -> int:
     test_calibration()
     test_supervision()
     test_kernel_route()
+    test_env_failure()
     print("\n" + ("ALL PASS" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
     return 1 if FAIL else 0
 

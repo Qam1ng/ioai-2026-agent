@@ -220,6 +220,39 @@ def opts(solver: str, ws: Path, args, budget: Budget, trace: Tracer,
     )
 
 
+# Failures the run cannot work its way out of. A solver that is thinking, or
+# stuck on a bad idea, is worth nudging; a solver whose account cannot pay for a
+# token will answer the nudge the same way forever. On the second timed-deps
+# rerun all three sat at `turns=1 $0.00 [no output]` for forty rounds in one
+# minute while the harness printed "stalled — nudging", because nothing
+# distinguished "no progress" from "no possible progress".
+FATAL_ENV = (
+    ("credit balance is too low", "the Anthropic account is out of credit"),
+    ("insufficient_quota", "the Anthropic account is out of credit"),
+    ("invalid x-api-key", "ANTHROPIC_API_KEY is not valid"),
+    ("authentication_error", "authentication was refused"),
+    ("oauth token has expired", "the OAuth token has expired — re-run "
+                                "`claude setup-token`"),
+    ("permission_error", "this key is not allowed to use the requested model"),
+)
+BROKEN: dict = {}
+
+
+def note_env(text: str, solver: str) -> None:
+    """Record a failure that no amount of retrying will fix."""
+    low = text.lower()
+    for needle, why in FATAL_ENV:
+        if needle in low:
+            if not BROKEN:
+                print(f"\n!! {why}. Every agent will fail the same way, so "
+                      f"there is nothing to wait for.\n!! seen from {solver}: "
+                      f"{text.strip()[:200]}\n", flush=True)
+            BROKEN.setdefault("why", why)
+            BROKEN.setdefault("first", solver)
+            BROKEN["seen"] = BROKEN.get("seen", 0) + 1
+            return
+
+
 async def drain(client, solver: str, budget: Budget, trace: Tracer,
                 mark_active: bool = True) -> tuple[float, int]:
     cost = turns = 0
@@ -232,6 +265,7 @@ async def drain(client, solver: str, budget: Budget, trace: Tracer,
         if isinstance(msg, AssistantMessage):
             for blk in msg.content:
                 if isinstance(blk, TextBlock) and blk.text.strip():
+                    note_env(blk.text, solver)
                     print(f"  [{solver}] {blk.text.strip()[:280]}")
                     trace.log("say", solver=solver, text=blk.text[:600])
                 elif isinstance(blk, ToolUseBlock):
@@ -381,6 +415,12 @@ async def run_solver(solver: str, ws: Path, args, budget: Budget,
 
                     tmpl = FIRST if rnd == 1 and life == 1 else CONTINUE
                     prompt = tmpl.format(slug=args.slug, budget=budget_line(budget))
+                    if BROKEN:
+                        print(f"  [{solver}] giving up: {BROKEN['why']}",
+                              flush=True)
+                        trace.log("env_broken", solver=solver, **BROKEN)
+                        clean = True
+                        break
                     if stalled >= 2:
                         prompt += NUDGE
                         trace.log("nudge", solver=solver, round=rnd)
@@ -581,7 +621,7 @@ async def review_loop(ws: Path, args, budget: Budget, trace: Tracer) -> None:
         return
     while True:
         await asyncio.sleep(3)
-        if budget.remaining() <= 0:
+        if budget.remaining() <= 0 or BROKEN:
             return
         try:
             cand = REVIEW_Q.get_nowait()
@@ -1678,7 +1718,16 @@ async def run(args) -> None:
             t.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
 
-    print(f"\n===== RUN COMPLETE =====\n{budget_line(budget)}")
+    if BROKEN:
+        # Say it once more at the end. The line that mattered scrolled past
+        # forty rounds ago, and a run that ends with "RUN COMPLETE" over an
+        # empty workspace reads as a modelling failure rather than an unpaid
+        # bill.
+        print(f"\n===== RUN ABORTED: {BROKEN['why']} =====")
+        print("No agent could run, so nothing here reflects on the system. "
+              "Fix the credential and relaunch; the workspace is untouched.")
+    print(f"\n===== RUN COMPLETE =====\n{budget_line(budget)}"
+          if not BROKEN else budget_line(budget))
     print(f"tokens in={budget.tokens_in} out={budget.tokens_out}")
     finalize(ws, args, budget, trace)
     print(f"workspace: {ws}\ntrace: {trace.path}\nfacts: {ws / 'facts.jsonl'}")
