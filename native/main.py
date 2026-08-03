@@ -1787,10 +1787,39 @@ def finalize(ws: Path, args, budget: Budget, trace: Tracer) -> None:
         trace.log("reaped", n=n)
 
 
+def claim_slug(ws: Path, slug: str) -> None:
+    """One run per competition, enforced rather than remembered.
+
+    Two launchers on one workspace overwrite each other's folds, score each
+    other's candidates and can both submit. It happened twice today — once
+    because I forgot a run was live, once because a `pkill` I did not check
+    silently matched nothing. Both times the evidence was a process listing I
+    happened to look at.
+    """
+    lock = ws / "RUN.lock"
+    if lock.exists():
+        try:
+            pid = int(lock.read_text().split()[0])
+        except Exception:  # noqa: BLE001
+            pid = -1
+        alive = Path(f"/proc/{pid}").exists() if pid > 0 else False
+        if alive:
+            raise SystemExit(
+                f"!! a run on {slug} is already live as pid {pid}, sharing this "
+                f"workspace.\n!! Stop it first (./killswitch.sh 0), or use a "
+                f"different --slug. Two launchers here overwrite each other's "
+                f"folds and can both submit.")
+        print(f"[boot] clearing a stale lock from pid {pid} (not running)",
+              flush=True)
+    lock.write_text(f"{os.getpid()} {int(time.time())}\n")
+
+
 async def run(args) -> None:
     _load_dotenv()
     START["t"] = time.time()
     ws = ROOT / "workspace" / f"hearsay-{args.slug}"
+    ws.mkdir(parents=True, exist_ok=True)
+    claim_slug(ws, args.slug)
     if args.solvers == 1:
         names = ["solver_solo"]
     else:

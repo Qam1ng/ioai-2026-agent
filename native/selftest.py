@@ -804,6 +804,22 @@ def test_last_act() -> None:
           "solver_b")
     check("no candidate at all is None", M.best_of(ws, {}), None)
 
+    # Two launchers on one workspace, twice in one day.
+    import os as _os
+    from native import main as _M
+    _M.claim_slug(ws, "x")
+    check("a run claims its workspace", (ws / "RUN.lock").exists(), True)
+    try:
+        _M.claim_slug(ws, "x")
+        second = "allowed"
+    except SystemExit:
+        second = "refused"
+    check("  and a second live run is refused", second, "refused")
+    (ws / "RUN.lock").write_text("999999999 0\n")
+    _M.claim_slug(ws, "x")
+    check("  but a stale lock does not wedge the next run",
+          (ws / "RUN.lock").read_text().split()[0], str(_os.getpid()))
+
     src = Path("native/main.py").read_text()
     check("the submitter no longer reads LKG first",
           "best = best_of(ws, scored)" in src, True)
