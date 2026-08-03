@@ -810,6 +810,100 @@ def test_chicken_timestamp_candidate() -> None:
     )
 
 
+def test_chicken_data_synthesis() -> None:
+    print("\n[chicken data synthesis]")
+    import math
+
+    import numpy as np
+
+    from native.scripts import chicken_data_synthesis as synth
+
+    # Geometry: the resized image is exactly twice the density grid, so a crop
+    # window in density coordinates has a hand-computable pixel window.
+    check("wide crop is 171x304", synth.crop_window(0.95, (0.0, 0.0)), (0, 0, 171, 304))
+    check("bottom-right anchor offsets", synth.crop_window(0.95, (1.0, 1.0))[:2], (9, 16))
+    check("tight crop is 140x250", synth.crop_window(0.78, (0.0, 0.0))[2:], (140, 250))
+    check(
+        "crop area fraction is exact",
+        round(171 * 304 / (180 * 320), 10),
+        round(0.9025, 10),
+    )
+    check(
+        "official exponential MRE",
+        round(synth.official_score([10.0, 20.0], [9.0, 22.0]), 12),
+        round(math.exp(-0.1), 12),
+    )
+
+    # The estimator is the sealed incumbent's and this component may not move it.
+    check("ridge alpha frozen", synth.RIDGE_ALPHA, 1.0)
+    check("knn neighbours frozen", synth.KNN_NEIGHBOURS, 2)
+    check("base scale frozen", synth.BASE_SCALE, 0.98055)
+    check(
+        "blend weights sum to one",
+        round(synth.BASE_WEIGHT + synth.LOG_RIDGE_WEIGHT, 10),
+        1.0,
+    )
+    check(
+        "component blend weights match the sealed logblend candidate",
+        (synth.RIDGE_WEIGHT, synth.KNN_WEIGHT, synth.LOG_RIDGE_ALPHA),
+        (0.570968517, 0.429020957, 0.10),
+    )
+    check(
+        "git push threshold is the documented public incumbent",
+        synth.REPO_PUBLIC_INCUMBENT,
+        0.93156,
+    )
+
+    table = synth.recipe_table()
+    check("incumbent recipe adds no rows", table["incumbent_original_only"], [])
+    known = {"full", "full_flip"} | {
+        f"crop{scale:g}{suffix}" for scale in synth.CROP_SCALES for suffix in ("", "_flip")
+    }
+    check(
+        "every recipe references a producible row kind",
+        sorted({tag for tags in table.values() for tag in tags} - known),
+        [],
+    )
+    check("six validation scenarios", len(synth.SCENARIOS), 6)
+    check("five validation seeds", len(synth.VALIDATION_SEEDS), 5)
+
+    # Cell construction: fit and query never overlap, and the purge scenario
+    # really removes the visual nearest neighbour of every held-out frame.
+    blocks = np.repeat(np.arange(10), 10)
+    nearest = np.roll(np.arange(100), 1)
+    for scenario in synth.SCENARIOS:
+        cell = synth.build_cell(scenario, 20260803, blocks, nearest, 100)
+        overlap = sorted(set(cell["fit"].tolist()) & set(cell["query"].tolist()))
+        check(f"{scenario} fit/query disjoint", overlap, [])
+    purged = synth.build_cell("purged_local_block", 20260803, blocks, nearest, 100)
+    leaked = sorted(
+        {int(nearest[p]) for p in purged["query"]} & set(purged["fit"].tolist())
+    )
+    check("purged scenario removes nearest neighbours", leaked, [])
+    noise = synth.build_cell("label_noise_stress", 20260803, blocks, nearest, 100)
+    check("label noise stress carries a factor", "label_factor" in noise, True)
+    thinned = synth.build_cell("label_anchor_thinning", 20260803, blocks, nearest, 100)
+    interleaved = synth.build_cell(
+        "interleaved_session_holdout", 20260803, blocks, nearest, 100
+    )
+    check(
+        "anchor thinning fits on fewer rows than the interleaved baseline",
+        len(thinned["fit"]) < len(interleaved["fit"]),
+        True,
+    )
+
+    # A candidate that changes nothing must not clear the robust gate.
+    zero = np.zeros(30)
+    check(
+        "zero-delta candidate fails the robust gate",
+        bool(
+            float(np.mean(zero > 0)) >= synth.GATE_MIN_POSITIVE_FRACTION
+            and float(np.quantile(zero, 0.10)) > synth.GATE_MIN_QUANTILE10
+        ),
+        False,
+    )
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         ws = Path(td)
@@ -822,6 +916,7 @@ def main() -> int:
         test_format_gate(ws)
         test_evidence_firewall_and_coordination(ws)
         test_chicken_timestamp_candidate()
+        test_chicken_data_synthesis()
     test_configs()
     test_submit_gate()
     test_solver_cannot_submit()

@@ -139,6 +139,75 @@ better model — which they caught with an invariance test and recorded as
 audit-only rather than banking. A pipeline exploiting row order has not learned
 the task, and on IOAI it is the kind of thing that gets a submission thrown out.
 
+## Data synthesis and the ruler
+
+`chicken_data_synthesis.py` owns one component: what rows go into the fit, and
+which ruler is allowed to say whether they helped. It does not touch the
+estimator. The scaler, Ridge, KNN, log-Ridge, their hyperparameters, the
+0.98055 calibration and the 70/30 blend are the incumbent's, and the self-test
+asserts each constant so the boundary cannot drift.
+
+**Exact labels, for free.** Every train frame ships a 180x320 density map whose
+sum *is* the label, and the frozen pipeline resizes the image to 360x640 —
+exactly twice the density grid. Any sub-window therefore carries an exact
+count: integrate the map over it. 100 frames become 3,200 exactly labelled rows
+with no external byte and no hidden label. Crops are taken at native scale so a
+chicken keeps its pixel size and only the field of view shrinks, and the target
+is area-normalised, which puts crops and full frames on one regression scale.
+Synthesis refuses to run unless its own full-frame path reproduces the sealed
+feature cache bit for bit; it does, to `0.0`.
+
+**Then the ruler threw all of it away.** Every recipe scores *below* the
+incumbent's 0.920087 at live anchor density — crops −0.0024 to −0.0042, mirrors
+−0.0047. Mirroring is the interpretable one: this is a fixed CCTV frame, so a
+mirrored coop is a viewpoint the camera cannot produce. The synthesis is real
+and the rejection is the finding.
+
+**The ruler is measured, not chosen.** Which holdout to score on is a property
+of the data, and it is checkable without a single label: compare how far a
+held-out frame sits from its fitting set to how far the live test frames sit
+from the whole labelled set.
+
+    live test -> train      median nearest-neighbour distance   52.71
+    leave-one-out                                               59.41   gap  6.71
+    interleaved 10%                                             59.84   gap  7.13
+    grouped 5-fold                                              62.62   gap  9.91
+    group holdout, 3 blocks                                     64.59   gap 11.89
+
+Test frames sit *closer* to the labelled set than labelled frames sit to each
+other, because 200 test frames are interleaved with 100 train frames across the
+same nine capture sessions. No train-only holdout can be as dense as the real
+thing, which is why local 0.8908 reads against public 0.93041; leave-one-out is
+the closest available and is what the component scores on.
+
+**Protocol parity is the whole point.** The previous chicken candidate was
+scored leave-one-out against a baseline scored five-fold grouped, and reported
+the difference as improvement:
+
+    candidate, leave-one-out                    0.927325
+    baseline, grouped five-fold                 0.890849   -> claimed  +0.036475
+    baseline, leave-one-out                     0.920087   -> matched  +0.007238
+                                                   inflation removed  +0.029237
+    what the board actually paid                                      -0.010850
+
+Eighty percent of that claim was the two sides being measured with different
+rulers. The residual +0.0072 is then rejected on its own evidence — block
+bootstrap over acquisition blocks puts P(positive) at 0.935 and the 95% lower
+bound at −0.0022 — so the same protocol that produces candidates also declines
+the one already known to have cost 0.011. A validator that cannot reject a
+known-bad candidate has not been shown to work, so that candidate is replayed
+as a standing negative control on every run.
+
+Scarce-anchor behaviour is still recorded — six stress scenarios across five
+seeds, where crops *do* help by up to +0.021 — but it is diagnostics. Selection
+reads the calibrated ruler and nothing else.
+
+    python -m native.scripts.chicken_data_synthesis prepare  --run-root <r> --source-root <s> --timestamps <t>
+    python -m native.scripts.chicken_data_synthesis synthesize --run-root <r> --source-root <s>
+    python -m native.scripts.chicken_data_synthesis validate --run-root <r>
+    python -m native.scripts.chicken_data_synthesis seal     --run-root <r>   # fails closed when nothing clears
+    python -m native.scripts.chicken_data_synthesis audit    --run-root <r>
+
 ## Supervision
 
 Deterministic, and deliberately not an agent: every question here is a

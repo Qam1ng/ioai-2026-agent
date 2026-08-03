@@ -1,0 +1,126 @@
+{
+  "component_scope": "data_synthesis_validation_submission_adversary_only",
+  "estimator_constants": {
+    "base_scale": 0.98055,
+    "base_weight": 0.7,
+    "knn_neighbours": 2,
+    "knn_weight": 0.429020957,
+    "log_ridge_alpha": 0.1,
+    "log_ridge_weight": 0.3,
+    "ridge_alpha": 1.0,
+    "ridge_weight": 0.570968517
+  },
+  "frozen_non_goals": [
+    "estimator choice and hyperparameters",
+    "feature extractor and feature summary",
+    "blend weights and calibration",
+    "solver search policy, manager scheduling, web-search route"
+  ],
+  "inputs": {
+    "base_checkpoint": {
+      "path": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260730-095001-chicken-counting-forge-v4/data/official/base.pth",
+      "sha256": "2e5077f2b97360a93f1dd6aa2c46801fbe7e77bd4681494f5e81ede22240cc13"
+    },
+    "grouped_folds": {
+      "path": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260730-095001-chicken-counting-forge-v4/trace_validation/grouped_folds.csv",
+      "sha256": "486e0adcc6848624888673ee9b55c96f89b8ed62387d83397140315b3fee76d6"
+    },
+    "sealed_test_features": {
+      "path": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260730-095001-chicken-counting-forge-v4/root_workspace/conv_test_features_640.npz",
+      "sha256": "9ab1fbb067ce944a4967a610fad44e57754027fe693a62e58820a364842de676"
+    },
+    "sealed_train_features": {
+      "path": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260730-095001-chicken-counting-forge-v4/root_workspace/conv_features_640.npz",
+      "sha256": "171152516e383f582e70d30c15fe9a285c24768185efa39d3a0f3dc183b99a60"
+    },
+    "submission_codec": {
+      "path": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260730-095001-chicken-counting-forge-v4/data/official/submission_codec.py",
+      "sha256": "007d1f04e045a0ecb6d6dc1f2b01c11e81a010a457a2a2ba4acbbfa0b427a7b5"
+    },
+    "test_metadata": {
+      "path": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260730-095001-chicken-counting-forge-v4/data/official/test_metadata.csv",
+      "sha256": "4bda16064fcfd0594cfd73030c230b520a6601fa93b81750c90e63d3dc777ef0"
+    },
+    "timestamps": {
+      "path": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260803-hearsay-v2-chicken-timestamp-frozen-v1/outputs/timestamps.json",
+      "sha256": "ee24028573b1a3a44e9b2e27089e375075a005d4fdd1f3b1d4d89c4b1282b46f"
+    }
+  },
+  "negative_control": {
+    "known_live_public_delta": -0.01085,
+    "mechanism": "same_session_dvr_timestamp_smoothing",
+    "timestamps_path": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260803-hearsay-v2-chicken-timestamp-frozen-v1/outputs/timestamps.json"
+  },
+  "run_root": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260804-hearsay-datasynth-chicken-frozen-v2",
+  "runner": {
+    "path": "/Users/bytedance/Documents/IOAI/ioai-2026-agent/native/scripts/chicken_data_synthesis.py",
+    "sha256": "c26cd352f17d546fc0075aba2737db4713c2e98af5a2684afc534070b759018e"
+  },
+  "schema_version": 1,
+  "source_root": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260730-095001-chicken-counting-forge-v4",
+  "status": "frozen_before_synthesis",
+  "submission_policy": {
+    "account_public_best": 0.93041,
+    "backend": "kaggle_csv",
+    "explicit_user_authority": true,
+    "git_push_requires_strict_public_improvement": true,
+    "no_leaderboard_read_between_freeze_and_submission": true,
+    "no_post_reveal_tuning": true,
+    "repo_public_incumbent": 0.93156,
+    "submission_slots_authorized": 1
+  },
+  "synthesis": {
+    "anchors": [
+      [
+        0.5,
+        0.5
+      ],
+      [
+        0.0,
+        0.0
+      ],
+      [
+        1.0,
+        1.0
+      ],
+      [
+        0.0,
+        1.0
+      ],
+      [
+        1.0,
+        0.0
+      ]
+    ],
+    "external_data": false,
+    "hidden_labels": false,
+    "method": "native_scale_density_integral_crops",
+    "scales": [
+      0.95,
+      0.87,
+      0.78
+    ],
+    "target": "area_normalised_count",
+    "test_images_used_for_fitting": false
+  },
+  "task": "ioai-2025-chicken-counting-mirror-unofficial",
+  "validation_protocol": {
+    "negative_control_required_to_fail": true,
+    "scenarios": [
+      "interleaved_session_holdout",
+      "group_holdout",
+      "purged_local_block",
+      "label_anchor_thinning",
+      "label_noise_stress",
+      "candidate_prediction_perturbation"
+    ],
+    "seeds": [
+      20260803,
+      20260817,
+      20260831,
+      20260914,
+      20260928
+    ],
+    "selection_uses_public_score": false
+  }
+}

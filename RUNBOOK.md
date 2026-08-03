@@ -84,7 +84,25 @@ commands, but the launcher's own variable is what defines "ours".
 
 ## Checks
 
-    python -m native.selftest                          # 163, hand-computed
+    python -m native.selftest                          # 188, hand-computed
     python -m native.monitor --slug <slug> --json
     python -m native.scripts.checkfolds --workspace <ws>
     python -m native.scripts.integrity --candidate <s> --workspace <ws>
+
+## Data synthesis (chicken)
+
+    python -m native.scripts.chicken_data_synthesis prepare \
+        --run-root <run> --source-root <forge-v4-run> --timestamps <timestamps.json>
+    python -m native.scripts.chicken_data_synthesis synthesize --run-root <run> --source-root <forge-v4-run>
+    python -m native.scripts.chicken_data_synthesis validate --run-root <run>
+    python -m native.scripts.chicken_data_synthesis seal --run-root <run>
+
+`synthesize` needs torch and Pillow and takes about five minutes for 3,200
+rows; `validate` calibrates the ruler and then scores every recipe on it, which
+is leave-one-out here and runs about nine minutes.
+
+`seal` exits 2 with `no recipe cleared the gate; the incumbent stands` when
+nothing beats the incumbent under the calibrated ruler. That is the expected
+outcome, not a failure — read `outputs/synthetic_validation_receipt.json`
+before overriding anything, in particular `protocol_mismatch_audit`, which says
+how much of a candidate's claimed margin was two rulers rather than progress.

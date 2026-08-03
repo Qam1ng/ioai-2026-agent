@@ -75,6 +75,12 @@ Measured, not assumed:
 - **The leaderboard score comes back.** The run learns whether its own
   measurements are trustworthy — on radar the local number ran 0.0012 below the
   board, on chicken 0.0129 below.
+- **Two candidates may not be compared on two different rulers.** The chicken
+  candidate that cost 0.011 of public score had been measured leave-one-out
+  against a baseline measured five-fold grouped; 80% of its claimed +0.0365 was
+  that mismatch and nothing else. Which ruler matches the live test set is now
+  measured from the feature geometry before anything is scored. See
+  [Data synthesis and the ruler](native/README.md#data-synthesis-and-the-ruler).
 
 ## Earlier status (Practice Task 1, single-agent era)
 
