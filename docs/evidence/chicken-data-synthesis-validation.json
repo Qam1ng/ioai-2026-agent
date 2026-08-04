@@ -1,0 +1,428 @@
+{
+  "negative_control": {
+    "live_public_delta_when_submitted": -0.01085,
+    "mechanism": "same-session DVR Gaussian timestamp smoothing, nested adoption",
+    "under_calibrated_ruler": {
+      "beats_measured_noise": true,
+      "bootstrap": {
+        "ci95": [
+          -0.0021772087620156744,
+          0.01780936603234177
+        ],
+        "draws": 20000,
+        "mre_improvement_point": 0.007835637478905722,
+        "probability_positive": 0.9349,
+        "unit": "acquisition_block"
+      },
+      "mean_delta": 0.007237785365856286,
+      "pass": false,
+      "positive_seed_fraction": 1.0,
+      "ruler_noise_sd": 0.0,
+      "worst_seed_delta": 0.007237785365856286
+    }
+  },
+  "outcome": "no recipe cleared the gate; the incumbent stands",
+  "protocol_mismatch_audit": {
+    "baseline_scored_grouped_5fold": 0.8908494655908779,
+    "baseline_scored_leave_one_out": 0.920086730115273,
+    "candidate_scored_leave_one_out": 0.9273245154811293,
+    "gain_claimed_by_cross_protocol_comparison": 0.03647504989025141,
+    "gain_under_one_ruler": 0.007237785365856286,
+    "inflation_removed_by_protocol_parity": 0.029237264524395123,
+    "live_public_delta_when_submitted": -0.01085,
+    "sealed_run_reported_gain": 0.039008
+  },
+  "ruler_calibration": {
+    "live_test_geometry": {
+      "median_test_to_train_distance": 52.70727729797363,
+      "note": "features only; no hidden label is touched by this measurement",
+      "p25": 47.433531761169434,
+      "p75": 62.33049297332764
+    },
+    "rulers": {
+      "group_holdout_3_blocks": {
+        "median_gap_vs_live": 11.885946273803711,
+        "median_query_to_fit_distance": 64.59322357177734,
+        "p25": 58.84559631347656,
+        "p75": 79.6883487701416
+      },
+      "grouped_5fold": {
+        "median_gap_vs_live": 9.910396575927734,
+        "median_query_to_fit_distance": 62.61767387390137,
+        "p25": 56.35706806182861,
+        "p75": 71.79328727722168
+      },
+      "interleaved_10pct": {
+        "median_gap_vs_live": 7.130231857299805,
+        "median_query_to_fit_distance": 59.83750915527344,
+        "p25": 53.31947708129883,
+        "p75": 65.43595886230469
+      },
+      "interleaved_25pct": {
+        "median_gap_vs_live": 8.454093933105469,
+        "median_query_to_fit_distance": 61.1613712310791,
+        "p25": 55.12554359436035,
+        "p75": 68.29166030883789
+      },
+      "leave_one_out": {
+        "median_gap_vs_live": 6.70637321472168,
+        "median_query_to_fit_distance": 59.41365051269531,
+        "p25": 51.4737024307251,
+        "p75": 64.36882781982422
+      }
+    },
+    "selected_ruler": "leave_one_out",
+    "selection_rule": "smallest absolute gap between median query-to-fit and median test-to-train distance"
+  },
+  "runtime_seconds": 590.9941639900208,
+  "schema_version": 1,
+  "sealed_anchors": {
+    "base_delta": 2.430868062397451e-08,
+    "blend_delta": 1.9644272875041224e-09,
+    "recomputed_base_oof": 0.8889049112675775,
+    "recomputed_blend_oof": 0.8908494655908779,
+    "sealed_base_oof": 0.8889048869588969,
+    "sealed_blend_oof": 0.8908494636264506,
+    "tolerance": 1e-07,
+    "tolerance_reason": "the sealed anchors were computed on another host; matrix reassociation moves the score in the eighth decimal, five orders below any difference this gate decides on"
+  },
+  "selected_recipe": null,
+  "selection_evidence": {
+    "incumbent_score": 0.920086730115273,
+    "rule": "one ruler for candidate and baseline; block bootstrap must clear zero",
+    "ruler": "leave_one_out",
+    "scores": {
+      "crop_all": [
+        0.9159371850622094
+      ],
+      "crop_all_mirrored": [
+        0.9159091432039408
+      ],
+      "crop_mid_tight": [
+        0.9177376201689386
+      ],
+      "crop_wide": [
+        0.9176457357678562
+      ],
+      "crop_wide_mid": [
+        0.9166801528905768
+      ],
+      "incumbent_original_only": [
+        0.920086730115273
+      ],
+      "mirror_only": [
+        0.9153990689087215
+      ],
+      "negative_control_dvr_timestamp": [
+        0.9273245154811293
+      ]
+    },
+    "seeds": [
+      20260803
+    ],
+    "selection_uses_public_score": false,
+    "summary": {
+      "crop_all": {
+        "beats_measured_noise": false,
+        "bootstrap": {
+          "ci95": [
+            -0.012673496605122252,
+            0.0038830591254480564
+          ],
+          "draws": 20000,
+          "mre_improvement_point": -0.0045201504010571845,
+          "probability_positive": 0.1512,
+          "unit": "acquisition_block"
+        },
+        "mean_delta": -0.00414954505306353,
+        "pass": false,
+        "positive_seed_fraction": 0.0,
+        "ruler_noise_sd": 0.0,
+        "worst_seed_delta": -0.00414954505306353
+      },
+      "crop_all_mirrored": {
+        "beats_measured_noise": false,
+        "bootstrap": {
+          "ci95": [
+            -0.011998076725856241,
+            0.0028487863046993854
+          ],
+          "draws": 20000,
+          "mre_improvement_point": -0.004550766351574579,
+          "probability_positive": 0.11785,
+          "unit": "acquisition_block"
+        },
+        "mean_delta": -0.004177586911332187,
+        "pass": false,
+        "positive_seed_fraction": 0.0,
+        "ruler_noise_sd": 0.0,
+        "worst_seed_delta": -0.004177586911332187
+      },
+      "crop_mid_tight": {
+        "beats_measured_noise": false,
+        "bootstrap": {
+          "ci95": [
+            -0.010913728756605488,
+            0.005808040408337458
+          ],
+          "draws": 20000,
+          "mre_improvement_point": -0.0025564045065536996,
+          "probability_positive": 0.2785,
+          "unit": "acquisition_block"
+        },
+        "mean_delta": -0.0023491099463344156,
+        "pass": false,
+        "positive_seed_fraction": 0.0,
+        "ruler_noise_sd": 0.0,
+        "worst_seed_delta": -0.0023491099463344156
+      },
+      "crop_wide": {
+        "beats_measured_noise": false,
+        "bootstrap": {
+          "ci95": [
+            -0.007240725233648364,
+            0.0019366029303470626
+          ],
+          "draws": 20000,
+          "mre_improvement_point": -0.0026565300752658823,
+          "probability_positive": 0.12915,
+          "unit": "acquisition_block"
+        },
+        "mean_delta": -0.002440994347416736,
+        "pass": false,
+        "positive_seed_fraction": 0.0,
+        "ruler_noise_sd": 0.0,
+        "worst_seed_delta": -0.002440994347416736
+      },
+      "crop_wide_mid": {
+        "beats_measured_noise": false,
+        "bootstrap": {
+          "ci95": [
+            -0.011226661899932324,
+            0.003321183656302482
+          ],
+          "draws": 20000,
+          "mre_improvement_point": -0.003709323335651218,
+          "probability_positive": 0.1622,
+          "unit": "acquisition_block"
+        },
+        "mean_delta": -0.0034065772246961723,
+        "pass": false,
+        "positive_seed_fraction": 0.0,
+        "ruler_noise_sd": 0.0,
+        "worst_seed_delta": -0.0034065772246961723
+      },
+      "mirror_only": {
+        "beats_measured_noise": false,
+        "bootstrap": {
+          "ci95": [
+            -0.011610987378082225,
+            0.00133078825505578
+          ],
+          "draws": 20000,
+          "mre_improvement_point": -0.005107826386620455,
+          "probability_positive": 0.0605,
+          "unit": "acquisition_block"
+        },
+        "mean_delta": -0.004687661206551508,
+        "pass": false,
+        "positive_seed_fraction": 0.0,
+        "ruler_noise_sd": 0.0,
+        "worst_seed_delta": -0.004687661206551508
+      },
+      "negative_control_dvr_timestamp": {
+        "beats_measured_noise": true,
+        "bootstrap": {
+          "ci95": [
+            -0.0021772087620156744,
+            0.01780936603234177
+          ],
+          "draws": 20000,
+          "mre_improvement_point": 0.007835637478905722,
+          "probability_positive": 0.9349,
+          "unit": "acquisition_block"
+        },
+        "mean_delta": 0.007237785365856286,
+        "pass": false,
+        "positive_seed_fraction": 1.0,
+        "ruler_noise_sd": 0.0,
+        "worst_seed_delta": 0.007237785365856286
+      }
+    }
+  },
+  "stress_diagnostics": {
+    "note": "scarce-anchor behaviour, recorded but never used to select",
+    "scenarios": [
+      "interleaved_session_holdout",
+      "group_holdout",
+      "purged_local_block",
+      "label_anchor_thinning",
+      "label_noise_stress",
+      "candidate_prediction_perturbation"
+    ],
+    "seeds": [
+      20260803,
+      20260817,
+      20260831,
+      20260914,
+      20260928
+    ],
+    "summary": {
+      "crop_all": {
+        "per_scenario_mean_delta": {
+          "candidate_prediction_perturbation": 0.0001410786266278663,
+          "group_holdout": 0.00893265622556294,
+          "interleaved_session_holdout": -0.000473684090686155,
+          "label_anchor_thinning": 0.010240669398622093,
+          "label_noise_stress": 0.00013127567933461924,
+          "purged_local_block": 0.02087567089766864
+        },
+        "robust": {
+          "mean": 0.006641277789521668,
+          "pass": false,
+          "positive_fraction": 0.7333333333333333,
+          "quantile10": -0.01255112833943135,
+          "worst_cell": -0.020597125173434816
+        }
+      },
+      "crop_all_mirrored": {
+        "per_scenario_mean_delta": {
+          "candidate_prediction_perturbation": 0.002589078735188588,
+          "group_holdout": 0.005136646143598123,
+          "interleaved_session_holdout": 0.00306282444155066,
+          "label_anchor_thinning": 0.005738984824873561,
+          "label_noise_stress": 0.00048520075440723344,
+          "purged_local_block": 0.011643751996160745
+        },
+        "robust": {
+          "mean": 0.004776081149296485,
+          "pass": false,
+          "positive_fraction": 0.6666666666666666,
+          "quantile10": -0.008152102613519174,
+          "worst_cell": -0.014369790656609815
+        }
+      },
+      "crop_mid_tight": {
+        "per_scenario_mean_delta": {
+          "candidate_prediction_perturbation": -0.0012461980357845403,
+          "group_holdout": 0.007568016850978321,
+          "interleaved_session_holdout": -0.0022275821461224645,
+          "label_anchor_thinning": 0.008128106927204826,
+          "label_noise_stress": -0.0009539652797652121,
+          "purged_local_block": 0.018269466753277473
+        },
+        "robust": {
+          "mean": 0.004922974178298067,
+          "pass": false,
+          "positive_fraction": 0.6333333333333333,
+          "quantile10": -0.01218790181245367,
+          "worst_cell": -0.025847519643842243
+        }
+      },
+      "crop_wide": {
+        "per_scenario_mean_delta": {
+          "candidate_prediction_perturbation": -3.719935346451209e-05,
+          "group_holdout": 0.0027963015543633007,
+          "interleaved_session_holdout": 0.00017520835268527434,
+          "label_anchor_thinning": 0.005466326797346088,
+          "label_noise_stress": 0.0011999866032270212,
+          "purged_local_block": 0.008480008868677901
+        },
+        "robust": {
+          "mean": 0.003013438803805846,
+          "pass": false,
+          "positive_fraction": 0.8,
+          "quantile10": -0.006209097597680102,
+          "worst_cell": -0.011977242222123707
+        }
+      },
+      "crop_wide_mid": {
+        "per_scenario_mean_delta": {
+          "candidate_prediction_perturbation": -0.0001722831428614846,
+          "group_holdout": 0.011711583194039954,
+          "interleaved_session_holdout": -0.0008535233079307147,
+          "label_anchor_thinning": 0.007819033622542836,
+          "label_noise_stress": 0.00039360002084389836,
+          "purged_local_block": 0.017231074091362108
+        },
+        "robust": {
+          "mean": 0.006021580746332767,
+          "pass": false,
+          "positive_fraction": 0.7333333333333333,
+          "quantile10": -0.00812209623359339,
+          "worst_cell": -0.011556431865524686
+        }
+      },
+      "mirror_only": {
+        "per_scenario_mean_delta": {
+          "candidate_prediction_perturbation": -0.0013642653411320316,
+          "group_holdout": -0.002879219205356609,
+          "interleaved_session_holdout": -0.0014677505363776433,
+          "label_anchor_thinning": 0.002375444014907813,
+          "label_noise_stress": -0.003642903048026125,
+          "purged_local_block": -0.016459514980467736
+        },
+        "robust": {
+          "mean": -0.003906368182742055,
+          "pass": false,
+          "positive_fraction": 0.3,
+          "quantile10": -0.01591860142462993,
+          "worst_cell": -0.047335817070752295
+        }
+      },
+      "negative_control_dvr_timestamp": {
+        "per_scenario_mean_delta": {
+          "candidate_prediction_perturbation": 0.011165063694442302,
+          "group_holdout": 0.040442168732156315,
+          "interleaved_session_holdout": 0.011110429851225923,
+          "label_anchor_thinning": 0.02031025377337039,
+          "label_noise_stress": 0.012821811787253811,
+          "purged_local_block": 0.0581048502973968
+        },
+        "robust": {
+          "mean": 0.025659096355974256,
+          "pass": true,
+          "positive_fraction": 1.0,
+          "quantile10": 0.006193574104091004,
+          "worst_cell": 0.0006667728226105174
+        }
+      }
+    }
+  },
+  "superseded_ruler": {
+    "direction_disagreements": [
+      "crop_all",
+      "crop_mid_tight",
+      "crop_wide",
+      "crop_wide_mid"
+    ],
+    "incumbent_score": 0.8908494655908779,
+    "note": "the ruler the previous runs selected on; kept to expose disagreement",
+    "ruler": "grouped_5fold",
+    "scores": {
+      "crop_all": [
+        0.8981275330210868
+      ],
+      "crop_all_mirrored": [
+        0.8900357472061253
+      ],
+      "crop_mid_tight": [
+        0.8959928264876666
+      ],
+      "crop_wide": [
+        0.8924642022126084
+      ],
+      "crop_wide_mid": [
+        0.899791633343075
+      ],
+      "incumbent_original_only": [
+        0.8908494655908779
+      ],
+      "mirror_only": [
+        0.884839748625593
+      ]
+    },
+    "would_have_promoted": "crop_wide_mid"
+  },
+  "task": "ioai-2025-chicken-counting-mirror-unofficial"
+}

@@ -137,6 +137,8 @@ class Reconciler:
 
     def _workspace_pids(self):
         root = str(self.ws.resolve())
+        if not Path("/proc").is_dir():
+            return
         for pid in os.listdir("/proc"):
             if not pid.isdigit():
                 continue

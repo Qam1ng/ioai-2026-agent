@@ -14,11 +14,17 @@ first practice task (**Audio Classifier**, a class-incremental learning problem)
 
 Three generations live in this repo. **HearSay is the current one; use it.**
 
-    python -m native.main --slug <competition> --solvers 3 \
+    python -m native.main --mode competition --slug <competition> --solvers 3 \
         --deadline-min 120 --max-cost-usd 100 --max-submissions 4
 
 See [`native/README.md`](native/README.md) for the design and, more usefully,
 for which failure produced each decision in it.
+
+The current revision adds an **Evidence Firewall** around HearSay. Use
+`--mode competition` for a real timed run with sparse post-submission
+calibration, or `--mode clean-benchmark` to seal leaderboard and web feedback
+from every candidate lineage. Both modes freeze the model, budget, routes,
+data contract, and submission authority before work starts.
 
 | | where | status |
 |---|---|---|
@@ -59,11 +65,25 @@ Measured, not assumed:
   angle on the board. A version that pre-assigned model/data/calibration aimed
   two of three solvers at ground that had nothing in it.
 - **Scores come from scripts, never from the agent that produced them.**
+- **Claims, adoptions, conflicts, results, and decisions carry stable fact IDs
+  and evidence references.** A route cannot cite itself as “collaboration.”
+- **A candidate is not just a CSV.** OOF predictions, folds, code/config hashes,
+  sample-locality probes, coordination receipts, and taint state are sealed
+  together; a failed gate retains the last-known-good candidate.
 - **Every gate that can refuse has a point past which it cannot.** Three runs
   were lost to gates that could say no indefinitely.
 - **The leaderboard score comes back.** The run learns whether its own
   measurements are trustworthy — on radar the local number ran 0.0012 below the
   board, on chicken 0.0129 below.
+- **Two candidates may not be compared on two different rulers.** The chicken
+  candidate that cost 0.011 of public score had been measured leave-one-out
+  against a baseline measured five-fold grouped; 80% of its claimed +0.0365 was
+  that mismatch and nothing else. Which ruler matches the live test set is now
+  measured from the feature geometry before anything is scored, and the new
+  ruler was checked prospectively rather than retrospectively: on the one recipe
+  where old and new point opposite ways, the registered prediction was 0.92700
+  and the board returned 0.92477. See
+  [Data synthesis and the ruler](native/README.md#data-synthesis-and-the-ruler).
 
 ## Earlier status (Practice Task 1, single-agent era)
 
@@ -115,6 +135,18 @@ solvers read the task, decide for themselves where they think it is won, and
 claim that angle on a shared board so the others take a different one. The
 fourth compiles the ruler everybody is measured with, then guards the door.
 
+For the whole thing as it actually runs — boot, the seven concurrent tasks, the
+deterministic layer, the four gates and the firewall — see
+[`docs/agent-system-asbuilt.svg`](docs/agent-system-asbuilt.svg):
+
+![HearSay as built](docs/agent-system-asbuilt.svg)
+
+And the data layer this branch adds, from the density-map identity through
+ruler calibration to the gate that rejected its own synthesis
+([`docs/data-synthesis.svg`](docs/data-synthesis.svg)):
+
+![Data synthesis and the ruler](docs/data-synthesis.svg)
+
 Everything that decides anything is a script. The agent that produced a
 candidate never says what it is worth; `evaluate.py` reads its predictions on a
 frozen split and computes the number. Nothing is submitted until four gates
@@ -132,9 +164,10 @@ which records for each decision the failure that produced it.
 | `native/facts.py` | the board — append-only, provenance-gated, two layers |
 | `native/prompts.py` | the contract appended to Claude Code's preset prompt |
 | `native/supervise.py` | drift reconciliation, stall detection, urgent delivery |
-| `native/scripts/` | recon · folds · checkfolds · evaluate · promote · check_format · integrity |
+| `native/evidence.py` | immutable run contract, clean/competition modes, taint and reveal receipts |
+| `native/scripts/` | recon · folds · evaluate · promote · integrity · coordination · sample locality · system A/B benchmark |
 | `native/monitor.py` | `./watch` — the board first, stuck gates above it |
-| `native/selftest.py` | 133 checks against hand-computed values |
+| `native/selftest.py` | 201 checks against hand-computed values |
 | `skills/validation-split/` | how to cut a split, loaded by the evaluator |
 
 ### Three things it does differently
@@ -166,10 +199,10 @@ cp .env.example .env                              # ANTHROPIC_API_KEY
 mkdir -p ~/.kaggle && printf 'KGAT_...' > ~/.kaggle/access_token
 chmod 600 ~/.kaggle/access_token
 
-python -m native.selftest                         # 133 checks, no API calls
+python -m native.selftest                         # 201 checks, no API calls
 
 export CUDA_VISIBLE_DEVICES=4,5,6,7               # only cards that are yours
-python -m native.main --slug <competition> --solvers 3 \
+python -m native.main --mode competition --slug <competition> --solvers 3 \
     --deadline-min 120 --max-cost-usd 100 --max-submissions 4
 ```
 

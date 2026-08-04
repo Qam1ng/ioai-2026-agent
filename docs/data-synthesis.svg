@@ -1,0 +1,139 @@
+<svg viewBox="0 0 900 1190" width="900" height="1190" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<rect width="900" height="1190" fill="#ffffff"/>
+<defs>
+<marker id="ar" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+<path d="M0 1 L9 5 L0 9 z" fill="#9a9a94"/>
+</marker>
+<marker id="arx" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+<path d="M0 1 L9 5 L0 9 z" fill="#b4574a"/>
+</marker>
+</defs>
+
+<text x="40" y="46" font-size="22" fill="#1a1a18">Data synthesis and the ruler</text>
+<text x="40" y="70" font-size="13.5" fill="#6b6b66">Exact labels are free. Deciding whether they helped is the hard part.</text>
+
+<rect x="40" y="90" width="150" height="26" rx="13" fill="#f1efe8"/>
+<text x="56" y="108" font-size="12.5" fill="#5f5e5a">frozen, hash-bound</text>
+<rect x="202" y="90" width="176" height="26" rx="13" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="218" y="108" font-size="12.5" fill="#5f5e5a">deterministic, no LLM</text>
+<rect x="390" y="90" width="196" height="26" rx="13" fill="#ffffff" stroke="#b4574a"/>
+<text x="406" y="108" font-size="12.5" fill="#b4574a">refuses, and says why</text>
+
+<!-- A. INPUTS -->
+<text x="40" y="154" font-size="12.5" fill="#888882">1 &#8212; OFFICIAL INPUTS, nothing else</text>
+<g font-size="13">
+<rect x="40" y="166" width="266" height="66" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="173" y="192" text-anchor="middle" fill="#2c2c2a">train/images &#8212; 100 frames</text>
+<text x="173" y="212" font-size="11.5" text-anchor="middle" fill="#7a7a74">fixed CCTV view, nine sessions</text>
+<rect x="317" y="166" width="266" height="66" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="450" y="192" text-anchor="middle" fill="#2c2c2a">train/density &#8212; 100 maps</text>
+<text x="450" y="212" font-size="11.5" text-anchor="middle" fill="#7a7a74">180 x 320 float32, sum = the label</text>
+<rect x="594" y="166" width="266" height="66" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="727" y="192" text-anchor="middle" fill="#2c2c2a">test_a + test_b &#8212; 200 frames</text>
+<text x="727" y="212" font-size="11.5" text-anchor="middle" fill="#7a7a74">inputs only, never a label</text>
+</g>
+<line x1="173" y1="232" x2="173" y2="262" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+<line x1="450" y1="232" x2="450" y2="262" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+<line x1="727" y1="232" x2="727" y2="558" stroke="#9a9a94" stroke-width="1.2" stroke-dasharray="4 4" marker-end="url(#ar)"/>
+<text x="737" y="400" font-size="11.5" fill="#7a7a74">test inputs are read</text>
+<text x="737" y="416" font-size="11.5" fill="#7a7a74">only to measure geometry</text>
+
+<!-- B. SYNTHESIS -->
+<text x="40" y="292" font-size="12.5" fill="#888882">2 &#8212; SYNTHESIS: any sub-window already carries an exact count</text>
+<rect x="40" y="304" width="660" height="46" rx="10" fill="#f1efe8"/>
+<text x="60" y="332" font-size="13.5" fill="#2c2c2a">the pipeline resizes each frame to <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace">360 x 640</tspan> &#8212; exactly twice the <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace">180 x 320</tspan> density grid</text>
+
+<g font-size="12.5">
+<rect x="40" y="370" width="156" height="86" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="118" y="396" text-anchor="middle" fill="#2c2c2a">crop a window</text>
+<text x="118" y="415" font-size="11.5" text-anchor="middle" fill="#7a7a74">native scale, no zoom</text>
+<text x="118" y="433" font-size="11.5" text-anchor="middle" fill="#7a7a74">3 scales x 5 anchors</text>
+
+<rect x="208" y="370" width="156" height="86" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="286" y="396" text-anchor="middle" fill="#2c2c2a">integrate the map</text>
+<text x="286" y="415" font-size="11.5" text-anchor="middle" fill="#7a7a74">count over that window</text>
+<text x="286" y="433" font-size="11.5" text-anchor="middle" fill="#7a7a74">exact, not estimated</text>
+
+<rect x="376" y="370" width="156" height="86" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="454" y="396" text-anchor="middle" fill="#2c2c2a">normalise by area</text>
+<text x="454" y="415" font-size="11.5" text-anchor="middle" fill="#7a7a74">crops and full frames</text>
+<text x="454" y="433" font-size="11.5" text-anchor="middle" fill="#7a7a74">share one target scale</text>
+
+<rect x="544" y="370" width="156" height="86" rx="10" fill="#f1efe8"/>
+<text x="622" y="396" text-anchor="middle" fill="#2c2c2a">frozen extractor</text>
+<text x="622" y="415" font-size="11.5" text-anchor="middle" fill="#7a7a74">official base.pth</text>
+<text x="622" y="433" font-size="11.5" text-anchor="middle" fill="#7a7a74">11904-d, untouched</text>
+</g>
+<line x1="196" y1="413" x2="206" y2="413" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+<line x1="364" y1="413" x2="374" y2="413" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+<line x1="532" y1="413" x2="542" y2="413" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+<line x1="370" y1="456" x2="370" y2="482" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+
+<rect x="40" y="490" width="660" height="52" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="60" y="513" font-size="13" fill="#2c2c2a">100 frames become 3,200 exactly labelled rows &#8212; no external data, no hidden label</text>
+<text x="60" y="532" font-size="11.5" fill="#7a7a74">refuses to run unless its own full-frame path reproduces the sealed feature cache bit for bit &#8212; it does, to 0.0</text>
+
+<!-- C. CALIBRATION -->
+<text x="40" y="582" font-size="12.5" fill="#888882">3 &#8212; CALIBRATE THE RULER: which holdout resembles the live test set? Features only, no labels</text>
+<rect x="40" y="594" width="300" height="150" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="60" y="620" font-size="13" fill="#2c2c2a">measure the live geometry</text>
+<text x="60" y="642" font-size="11.5" fill="#7a7a74">how far does a test frame sit from</text>
+<text x="60" y="659" font-size="11.5" fill="#7a7a74">the labelled set it will be scored against?</text>
+<text x="60" y="690" font-size="12.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#2c2c2a">test -&gt; train   median 52.71</text>
+<text x="60" y="716" font-size="11.5" fill="#7a7a74">200 test frames are interleaved with 100</text>
+<text x="60" y="733" font-size="11.5" fill="#7a7a74">train frames across the same nine sessions</text>
+
+<rect x="360" y="594" width="500" height="158" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="380" y="620" font-size="13" fill="#2c2c2a">then compare every candidate ruler to it</text>
+<text x="638" y="640" font-size="10.5" fill="#888882">median</text>
+<text x="762" y="640" font-size="10.5" fill="#888882">gap vs live</text>
+<rect x="372" y="644" width="476" height="22" rx="4" fill="#f1efe8"/>
+<g font-size="12.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+<text x="380" y="660" fill="#2c2c2a">leave-one-out</text>
+<text x="638" y="660" fill="#2c2c2a">59.41</text>
+<text x="762" y="660" fill="#2c2c2a">6.71</text>
+<text x="380" y="682" fill="#7a7a74">interleaved 10%</text>
+<text x="638" y="682" fill="#7a7a74">59.84</text>
+<text x="762" y="682" fill="#7a7a74">7.13</text>
+<text x="380" y="703" fill="#7a7a74">interleaved 25%</text>
+<text x="638" y="703" fill="#7a7a74">61.16</text>
+<text x="762" y="703" fill="#7a7a74">8.45</text>
+<text x="380" y="724" fill="#b4574a">grouped five-fold</text>
+<text x="638" y="724" fill="#b4574a">62.62</text>
+<text x="762" y="724" fill="#b4574a">9.91</text>
+</g>
+<text x="380" y="744" font-size="11" fill="#b4574a">the ruler the previous runs ranked every candidate on</text>
+<line x1="190" y1="752" x2="190" y2="786" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+<line x1="610" y1="752" x2="610" y2="786" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+
+<!-- D. SELECTION -->
+<text x="40" y="806" font-size="12.5" fill="#888882">4 &#8212; SCORE ON THE ONE RULER: a candidate may not bring its own baseline</text>
+<rect x="40" y="818" width="820" height="112" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="60" y="844" font-size="13" fill="#2c2c2a">every recipe and the incumbent are scored in the same pass, on the same held-out rows, with the same fitting sets</text>
+<text x="60" y="866" font-size="11.5" fill="#7a7a74">synthetic rows derived from a held-out frame are excluded from that frame's fit &#8212; otherwise the crop is the answer key</text>
+<line x1="60" y1="882" x2="840" y2="882" stroke="#e6e4dc" stroke-width="1"/>
+<text x="60" y="905" font-size="12.5" fill="#2c2c2a">gate: mean delta &gt; 0 &#183; every seed &gt; 0 &#183; beats measured ruler noise &#183; block-bootstrap CI lower &gt; 0 &#183; P(positive) &#8805; 0.95</text>
+<text x="60" y="922" font-size="11.5" fill="#7a7a74">six scarce-anchor stress scenarios are recorded alongside, as diagnostics, and never used to select</text>
+
+<line x1="270" y1="930" x2="270" y2="966" stroke="#b4574a" stroke-width="1.2" marker-end="url(#arx)"/>
+<line x1="640" y1="930" x2="640" y2="966" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+
+<!-- E. OUTCOME -->
+<text x="40" y="990" font-size="12.5" fill="#888882">5 &#8212; WHAT CAME OUT</text>
+<rect x="40" y="1002" width="400" height="112" rx="10" fill="#ffffff" stroke="#b4574a"/>
+<text x="60" y="1028" font-size="13" fill="#b4574a">every synthetic recipe was rejected</text>
+<text x="60" y="1050" font-size="11.5" fill="#7a7a74">at live anchor density crops score -0.0024 to -0.0042</text>
+<text x="60" y="1067" font-size="11.5" fill="#7a7a74">and mirrors -0.0047 &#8212; a fixed camera cannot produce</text>
+<text x="60" y="1084" font-size="11.5" fill="#7a7a74">a mirrored coop. seal exits 2, the incumbent stands.</text>
+<text x="60" y="1104" font-size="11.5" fill="#7a7a74">The synthesis is real; the rejection is the result.</text>
+
+<rect x="460" y="1002" width="400" height="112" rx="10" fill="#f1efe8"/>
+<text x="480" y="1028" font-size="13" fill="#2c2c2a">and the ruler was checked against the board</text>
+<text x="480" y="1050" font-size="11.5" fill="#7a7a74">one slot went on the recipe where old and new rulers</text>
+<text x="480" y="1067" font-size="11.5" fill="#7a7a74">disagree in direction, prediction hashed before sending</text>
+<text x="480" y="1090" font-size="12.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#2c2c2a">registered 0.92700  ->  board 0.92477</text>
+<text x="480" y="1107" font-size="11.5" fill="#7a7a74">the ruler it replaces would have promoted a regression</text>
+
+<text x="40" y="1146" font-size="11.5" fill="#888882" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">native/scripts/chicken_data_synthesis.py &#8212; prepare &#183; synthesize &#183; validate &#183; seal &#183; audit &#183; record</text>
+<text x="40" y="1166" font-size="11.5" fill="#888882">The estimator never changes. Scaler, Ridge, KNN, log-Ridge, the calibration and the blend are the incumbent's; only the rows and the protocol are new.</text>
+</svg>

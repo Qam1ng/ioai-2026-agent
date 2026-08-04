@@ -1,0 +1,136 @@
+{
+  "calibrated_ruler": "leave_one_out",
+  "duplicate_generation_byte_identical": true,
+  "fitting_rows": 1100,
+  "gate": {
+    "beats_measured_noise": false,
+    "bootstrap": {
+      "ci95": [
+        -0.011226661899932324,
+        0.003321183656302482
+      ],
+      "draws": 20000,
+      "mre_improvement_point": -0.003709323335651218,
+      "probability_positive": 0.1622,
+      "unit": "acquisition_block"
+    },
+    "mean_delta": -0.0034065772246961723,
+    "pass": false,
+    "positive_seed_fraction": 0.0,
+    "ruler_noise_sd": 0.0,
+    "worst_seed_delta": -0.0034065772246961723
+  },
+  "leaderboard_read_after_freeze": false,
+  "outputs": {
+    "run_a": {
+      "counts_path": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260804-hearsay-datasynth-chicken-frozen-v3/outputs/run_a/predicted_counts.npy",
+      "counts_sha256": "585d5d13d3a108ca2e54b6e292f885a5db2e9dfb4272c0a9c7e2fe4c2911822f",
+      "submission_path": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260804-hearsay-datasynth-chicken-frozen-v3/outputs/run_a/submission.csv",
+      "submission_sha256": "cb015310afa268715b7395a990930b6faa4b6312adb31888c1cc81a9f45979b3",
+      "validation": {
+        "columns": [
+          "id",
+          "density_map"
+        ],
+        "finite": true,
+        "id_order_exact": true,
+        "max_codec_sum_error": 1.7462285114788756e-05,
+        "nonnegative": true,
+        "rows": 200,
+        "sha256": "cb015310afa268715b7395a990930b6faa4b6312adb31888c1cc81a9f45979b3"
+      }
+    },
+    "run_b": {
+      "counts_path": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260804-hearsay-datasynth-chicken-frozen-v3/outputs/run_b/predicted_counts.npy",
+      "counts_sha256": "585d5d13d3a108ca2e54b6e292f885a5db2e9dfb4272c0a9c7e2fe4c2911822f",
+      "submission_path": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260804-hearsay-datasynth-chicken-frozen-v3/outputs/run_b/submission.csv",
+      "submission_sha256": "cb015310afa268715b7395a990930b6faa4b6312adb31888c1cc81a9f45979b3",
+      "validation": {
+        "columns": [
+          "id",
+          "density_map"
+        ],
+        "finite": true,
+        "id_order_exact": true,
+        "max_codec_sum_error": 1.7462285114788756e-05,
+        "nonnegative": true,
+        "rows": 200,
+        "sha256": "cb015310afa268715b7395a990930b6faa4b6312adb31888c1cc81a9f45979b3"
+      }
+    }
+  },
+  "prediction_registry": {
+    "account_public_best_for_the_same_estimator": 0.93041,
+    "candidate_score_under_ruler": 0.9166801528905768,
+    "confirmed_if": "public score lands below 0.93041 and within 0.005 of 0.92700",
+    "delta_under_ruler": -0.0034065772246961723,
+    "falsified_if": "public score exceeds 0.93041, which would mean the ruler ranked a synthetic recipe below the incumbent when the board ranks it above",
+    "incumbent_score_under_ruler": 0.920086730115273,
+    "predicted_public_score": 0.9270034227753038,
+    "prediction_band": 0.005,
+    "purpose": "prospective test of the calibrated ruler, not a promotion",
+    "registered_before_submission": true,
+    "ruler": "leave_one_out",
+    "ruler_to_board_offset": 0.010323269884726982
+  },
+  "prediction_summary": {
+    "max": 55.827895156986045,
+    "mean": 31.272536761194637,
+    "median": 29.425850077846775,
+    "min": 16.247141833903626
+  },
+  "promotion": false,
+  "protocol_mismatch_audit": {
+    "baseline_scored_grouped_5fold": 0.8908494655908779,
+    "baseline_scored_leave_one_out": 0.920086730115273,
+    "candidate_scored_leave_one_out": 0.9273245154811293,
+    "gain_claimed_by_cross_protocol_comparison": 0.03647504989025141,
+    "gain_under_one_ruler": 0.007237785365856286,
+    "inflation_removed_by_protocol_parity": 0.029237264524395123,
+    "live_public_delta_when_submitted": -0.01085,
+    "sealed_run_reported_gain": 0.039008
+  },
+  "sample_local_invariance": {
+    "permutation_max_error": 0.0,
+    "rebatch_max_error": 4.17019843723665e-06,
+    "strict_subset_max_error": 2.085099218618325e-06
+  },
+  "schema_version": 1,
+  "selected_recipe": "crop_wide_mid",
+  "selected_recipe_tags": [
+    "crop0.95",
+    "crop0.87"
+  ],
+  "status": "sealed_falsification_test",
+  "stress_diagnostics": {
+    "per_scenario_mean_delta": {
+      "candidate_prediction_perturbation": -0.0001722831428614846,
+      "group_holdout": 0.011711583194039954,
+      "interleaved_session_holdout": -0.0008535233079307147,
+      "label_anchor_thinning": 0.007819033622542836,
+      "label_noise_stress": 0.00039360002084389836,
+      "purged_local_block": 0.017231074091362108
+    },
+    "robust": {
+      "mean": 0.006021580746332767,
+      "pass": false,
+      "positive_fraction": 0.7333333333333333,
+      "quantile10": -0.00812209623359339,
+      "worst_cell": -0.011556431865524686
+    }
+  },
+  "submission_adversary": {
+    "external_data_used": false,
+    "fitting_matrix_is_train_only": true,
+    "hidden_labels_read": false,
+    "max_abs_shift_vs_incumbent": 7.767976665148716,
+    "mean_abs_shift_vs_incumbent": 1.02650160833151,
+    "prediction_within_plausible_range": true,
+    "row_order_independent": true,
+    "scaler_fit_on_train_only": true,
+    "test_features_absent_from_fit": true
+  },
+  "submission_sent": false,
+  "synthetic_rows_used": 1000,
+  "task": "ioai-2025-chicken-counting-mirror-unofficial"
+}

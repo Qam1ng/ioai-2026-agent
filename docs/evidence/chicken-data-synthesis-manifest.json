@@ -1,0 +1,60 @@
+{
+  "artifact_path": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260804-hearsay-datasynth-chicken-frozen-v3/outputs/synthetic_rows.npz",
+  "artifact_sha256": "d5f6e70ff37ec76c2753676f9ebc2ebfcc1e6bd79df0314f3bca55c293799853",
+  "crop_anchors": [
+    [
+      0.5,
+      0.5
+    ],
+    [
+      0.0,
+      0.0
+    ],
+    [
+      1.0,
+      1.0
+    ],
+    [
+      0.0,
+      1.0
+    ],
+    [
+      1.0,
+      0.0
+    ]
+  ],
+  "crop_scales": [
+    0.95,
+    0.87,
+    0.78
+  ],
+  "feature_dimension": 11904,
+  "frames": 100,
+  "kinds": [
+    "crop0.78",
+    "crop0.78_flip",
+    "crop0.87",
+    "crop0.87_flip",
+    "crop0.95",
+    "crop0.95_flip",
+    "full",
+    "full_flip"
+  ],
+  "label_provenance": "official train density maps only; no hidden label, no external data",
+  "method": "native_scale_density_integral_crops_with_area_normalised_targets",
+  "rows": 3200,
+  "runtime_seconds": 1584.6830458641052,
+  "schema_version": 1,
+  "sealed_pipeline_reproduction": {
+    "exact": true,
+    "full_frame_feature_max_abs_delta": 0.0,
+    "full_frame_target_max_abs_delta": 0.0,
+    "sealed_features": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260730-095001-chicken-counting-forge-v4/root_workspace/conv_features_640.npz",
+    "sealed_features_sha256": "171152516e383f582e70d30c15fe9a285c24768185efa39d3a0f3dc183b99a60"
+  },
+  "target_range": [
+    5.734551852577042,
+    89.89311432429866
+  ],
+  "task": "ioai-2025-chicken-counting-mirror-unofficial"
+}
