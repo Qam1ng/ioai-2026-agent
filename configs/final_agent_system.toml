@@ -1,0 +1,66 @@
+# IOAI 最终系统默认配置。正式比赛时长必须由 CLI 的 --duration-minutes 显式传入；
+# 这里不硬编码“30 分钟测试”。所有真实提交还必须额外传 --live。
+
+[run]
+workspace_root = "workspace/final_system"
+poll_seconds = 10
+max_submissions = 50
+
+# 50 次额度：1 个 floor；最多 3 个路线 calibration；中间动态 milestone；
+# 最后固定保留 8 个 final/recovery。milestone 没有按路线平均切死。
+final_reserve = 8
+initial_calibrations = 3
+final_start_fraction = 0.80
+anti_monopoly_fraction = 0.50
+min_local_gain = 0.0
+metric_direction = "maximize"
+
+# formal IOAI 默认是 kernel；auto 会先查询 Kaggle，private 查询不到时严格回退 kernel。
+# 是否真实提交只由 CLI 的显式 `--live` 决定，配置文件不能暗中打开写权限。
+submission_mode = "auto"
+
+# Kaggle 同一账号最多并行 2 个 GPU kernel。Broker 的预留锁保证并发不重复/超发。
+max_inflight_submissions = 2
+
+# 6 小时正式赛默认在 T-120min 停止新探索，留给复算、kernel 队列和最终提交。
+# 短 rehearsal 会按 controller 的比例缩短，不会照搬 120 分钟。
+stop_exploration_minutes_before_end = 120
+submission_only_minutes_before_end = 20
+
+[search]
+enabled = true
+duration_minutes = 60
+analyst_backend = "claude"
+research_backends = ["claude", "claude", "claude", "claude"]
+prompt_spec = "search_system/SEARCH_PROMPTS_ZH.md"
+
+[claude]
+binary = "/opt/homebrew/bin/claude"
+model = "claude-fable-5"
+effort = "high"
+
+# 可填同一路径；若有两个 Max 账号，分开后一次 usage limit 不会同时击穿主线和兜底线。
+# 先分别用 `CLAUDE_CONFIG_DIR=<dir> claude /login` 登录。Agent HOME 仍另行隔离。
+integrated_profile_dir = "~/.claude-ioai-integrated"
+direct_profile_dir = "~/.claude-ioai-direct"
+turn_minutes = 45
+max_rounds = 12
+
+[codex]
+binary = "/opt/homebrew/bin/codex"
+model = "openai/gpt-5.6-sol"
+effort = "high"
+provider_id = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+supports_web_search = true
+turn_minutes = 45
+max_rounds = 12
+
+[hearsay]
+enabled = true
+model = "claude-fable-5"
+effort = "high"
+solvers = 3
+rounds = 40
+max_turns = 250

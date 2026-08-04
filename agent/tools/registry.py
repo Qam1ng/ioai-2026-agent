@@ -102,8 +102,16 @@ def list_dir(args, ctx):
 # --------------------------------------------------------------------------- #
 # kaggle
 # --------------------------------------------------------------------------- #
+def _kaggle_bin() -> str:
+    """Find the Kaggle CLI even when a detached launcher has a narrow PATH."""
+    import shutil
+    import sys
+    beside = Path(sys.executable).parent / "kaggle"
+    return str(beside) if beside.exists() else (shutil.which("kaggle") or "kaggle")
+
+
 def _kg(cmd: list[str], timeout=1800):
-    r = subprocess.run(["kaggle"] + cmd, capture_output=True, text=True,
+    r = subprocess.run([_kaggle_bin()] + cmd, capture_output=True, text=True,
                        timeout=timeout)
     return _tail((r.stdout or "") + (("\n[stderr]\n" + r.stderr) if r.stderr else ""))
 
@@ -158,7 +166,7 @@ def kaggle_kernel_log(args, ctx):
 
 
 def kaggle_submit(args, ctx):
-    """Submit a finished kernel's output file to the code competition (gated)."""
+    """Submit either a direct CSV or a finished code-competition kernel."""
     if ctx.budget and not ctx.budget.can_submit():
         return "[BLOCKED by submit_gate: submission budget exhausted]"
     ref = args.get("kernel_ref") or ctx.kernel_ref
@@ -167,9 +175,13 @@ def kaggle_submit(args, ctx):
     from kaggle.api.kaggle_api_extended import KaggleApi
     api = KaggleApi(); api.authenticate()
     try:
-        r = api.competition_submit_code(args.get("file_name", "submission.csv"),
-                                        msg, ctx.slug, kernel=ref,
-                                        kernel_version=ver)
+        if args.get("csv_path"):
+            p = _safe(ctx, args["csv_path"])
+            r = api.competition_submit(str(p), msg, ctx.slug)
+        else:
+            r = api.competition_submit_code(
+                args.get("file_name", "submission.csv"), msg, ctx.slug,
+                kernel=ref, kernel_version=ver)
         if ctx.budget:
             ctx.budget.note_submit()
         return f"SUBMITTED: {r}"
@@ -180,6 +192,42 @@ def kaggle_submit(args, ctx):
 
 def kaggle_submissions(args, ctx):
     return _kg(["competitions", "submissions", "-c", ctx.slug])
+
+
+def kaggle_overview(args, ctx):
+    """Fetch official competition pages, including private competitions."""
+    from kaggle.api.kaggle_api_extended import KaggleApi
+    api = KaggleApi(); api.authenticate()
+    result = api.competition_list_pages(ctx.slug)
+    pages = getattr(result, "pages", result) or []
+    drop = ("rules", "terms", "license", "faq", "prizes", "team")
+    sections = []
+    for page in pages:
+        name = (getattr(page, "name", "") or "").strip()
+        content = (getattr(page, "content", "") or "").strip()
+        if content and not any(word in name.lower() for word in drop):
+            sections.append(f"# [{name}]\n{content}")
+    if not sections:
+        sections = [
+            f"# [{getattr(page, 'name', '?')}]\n"
+            f"{(getattr(page, 'content', '') or '')[:4000]}"
+            for page in pages
+        ]
+    body = "\n\n".join(sections)
+    templates = (
+        "below is an example of a typical evaluation page",
+        "the evaluation section describes how submissions will be scored",
+        "the description section is used to further explain",
+        "this page appears alongside the data files",
+    )
+    hits = [text for text in templates if text in body.lower()]
+    if hits:
+        body = (
+            "!! WARNING — UNFILLED KAGGLE TEMPLATE DETECTED !!\n"
+            "The metric or format below may be example boilerplate, not this task. "
+            "Cross-check it against the shipped assets.\n\n" + body
+        )
+    return _tail(body, 16000)
 
 
 # --------------------------------------------------------------------------- #
@@ -258,11 +306,14 @@ TOOLS = [
        {"kernel_ref": {"type": "string"}}, [], kaggle_kernel_status),
     _t("kaggle_kernel_log", "Fetch the last pushed kernel's run log (after it finishes).",
        {"kernel_ref": {"type": "string"}}, [], kaggle_kernel_log),
-    _t("kaggle_submit", "Submit the finished kernel's output to the competition. Budget-gated.",
+    _t("kaggle_submit", "Submit a CSV or finished kernel output. Budget-gated.",
        {"kernel_ref": {"type": "string"}, "kernel_version": {"type": "integer"},
-        "message": {"type": "string"}, "file_name": {"type": "string"}}, [], kaggle_submit),
+        "message": {"type": "string"}, "file_name": {"type": "string"},
+        "csv_path": {"type": "string"}}, [], kaggle_submit),
     _t("kaggle_submissions", "List this competition's submissions and scores.",
        {}, [], kaggle_submissions),
+    _t("kaggle_overview", "Fetch the official task pages via the Kaggle API. Read this first.",
+       {}, [], kaggle_overview),
     _t("memory_recall", "Recall lessons from past runs/tasks (optionally filter by query).",
        {"query": {"type": "string"}}, [], memory_recall),
     _t("memory_write", "Save a durable lesson for future runs (name + markdown content).",

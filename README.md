@@ -66,6 +66,14 @@ non-overlapping Research Agents, resumes the same Analyst session for synthesis,
 and stores every prompt and JSONL trajectory. See the
 [Chinese operator guide](search_system/README.md).
 
+### Final three-lane competition system
+
+The integrated competition controller lives in [`final_system/`](final_system/):
+Search→HearSay plus independent Codex and Claude Code fallback lanes, one frozen
+local evaluator, and one persistent submission broker. See the
+[Chinese architecture and runbook](docs/最终Agent系统.md). Real Kaggle writes are
+disabled unless the operator explicitly passes `--live`.
+
 ## How it works
 
 ```

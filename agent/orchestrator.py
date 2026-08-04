@@ -41,7 +41,10 @@ class Budget:
 
     def exhausted(self) -> str | None:
         if self.remaining() <= 0: return "wall-clock deadline reached"
-        if self.cost_usd >= self.max_cost_usd: return "LLM cost budget reached"
+        # 0 表示不设费用上限。Claude Max 订阅路线没有可用的逐次 API 费用，
+        # 正式比赛也不能因为默认值为 0 而在第一轮前被误判为预算耗尽。
+        if self.max_cost_usd and self.cost_usd >= self.max_cost_usd:
+            return "LLM cost budget reached"
         return None
 
     def status_line(self) -> str:

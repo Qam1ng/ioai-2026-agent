@@ -1,5 +1,7 @@
 # Core agent brain
 anthropic>=0.40
+anyio>=4.0
+claude-agent-sdk>=0.1.0
 
 # Kaggle submission (At Home practice tasks run on Kaggle)
 kaggle

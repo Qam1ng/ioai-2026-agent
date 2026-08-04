@@ -1,0 +1,551 @@
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import os
+import re
+import signal
+import sys
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from search_system.ioai_agent_system.search_assets import (
+    AssetSnapshot,
+    snapshot_assets,
+    verify_snapshot,
+)
+from search_system.ioai_agent_system.search_orchestrator import (
+    SearchOrchestrator,
+    SearchRunConfig,
+)
+
+from .broker import SubmissionBroker
+from .config import SystemConfig
+from .evaluation import freeze_contract
+from .io import append_jsonl, atomic_json, read_json, sha256_file, tree_hash
+from .kaggle import DryRunAdapter, KaggleAdapter
+from .prompts import continuation_prompt, direct_prompt
+from .registry import CandidateRegistry, candidate_fingerprint
+from .runners import (
+    ClaudeSubscriptionRunner,
+    OpenRouterCodexRunner,
+    run_lane_loop,
+)
+
+ROOT = Path(__file__).resolve().parents[1]
+_REQUIRED_SEARCH = (
+    "SEARCH_OUTPUT.md", "ASSET_MAP.md", "TASK_ANALYSIS.md", "RESEARCH_SYNTHESIS.md"
+)
+
+
+def _safe_id(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-")[:80]
+
+
+def _link(target: Path, link: Path) -> None:
+    link.parent.mkdir(parents=True, exist_ok=True)
+    if link.exists() or link.is_symlink():
+        link.unlink()
+    link.symlink_to(Path(target).resolve(), target_is_directory=Path(target).is_dir())
+
+
+def _verify_sha256sums(root: Path, sha_path: Path) -> None:
+    for line in sha_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        digest, relative = line.split("  ", 1)
+        if sha256_file(Path(root) / relative) != digest:
+            raise ValueError(f"asset hash mismatch: {relative}")
+
+
+class FinalController:
+    def __init__(
+        self, *, config: SystemConfig, slug: str, assets_dir: Path,
+        duration_minutes: float, competition_mode: str, kaggle_user: str,
+        live: bool, run_id: str = "",
+    ):
+        if duration_minutes <= 0:
+            raise ValueError("duration_minutes must be positive")
+        if competition_mode not in {"practice", "formal"}:
+            raise ValueError("competition_mode must be practice or formal")
+        if live and not kaggle_user:
+            raise ValueError("--kaggle-user is required with --live")
+        self.config = config
+        self.slug = slug
+        self.assets_dir = Path(assets_dir).expanduser().resolve()
+        self.duration_minutes = duration_minutes
+        self.competition_mode = competition_mode
+        self.kaggle_user = kaggle_user
+        self.live = live
+        stamp = run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        self.session = config.run.workspace_root / f"{_safe_id(slug)}-{_safe_id(stamp)}"
+        self.search_root = self.session / "search"
+        self.shared = self.session / "shared"
+        self.eval_root = self.shared / "evaluation"
+        self.control = self.session / "control"
+        self.lanes = self.session / "lanes"
+        self.hearsay_ws = self.lanes / "hearsay"
+        self.events = self.control / "controller_events.jsonl"
+        self.status_path = self.session / "RUN_STATUS.json"
+        self._fallback_snapshot: AssetSnapshot | None = None
+        self._hearsay_process: asyncio.subprocess.Process | None = None
+        self._stable: dict[str, tuple[str, int]] = {}
+
+    def _event(self, event: str, **payload: Any) -> None:
+        append_jsonl(self.events, {"timestamp": time.time(), "event": event, **payload})
+
+    def _claude_runner(self, profile_dir: Path) -> ClaudeSubscriptionRunner:
+        c = self.config.claude
+        return ClaudeSubscriptionRunner(
+            binary=c.binary, model=c.model, effort=c.effort,
+            profile_dir=profile_dir,
+        )
+
+    def _codex_runner(self) -> OpenRouterCodexRunner:
+        c = self.config.codex
+        return OpenRouterCodexRunner(
+            binary=c.binary, model=c.model, effort=c.effort,
+            provider_id=c.provider_id, base_url=c.base_url,
+            api_key_env=c.api_key_env,
+            supports_web_search=c.supports_web_search,
+        )
+
+    def _prepare(self) -> None:
+        if self.session.exists():
+            raise FileExistsError(f"session already exists: {self.session}")
+        for path in (self.search_root, self.shared, self.control, self.lanes):
+            path.mkdir(parents=True, exist_ok=True)
+        atomic_json(
+            self.status_path,
+            {
+                "schema_version": 1, "status": "running", "slug": self.slug,
+                "session": str(self.session), "started_at": time.time(),
+                "duration_minutes": self.duration_minutes,
+                "competition_mode": self.competition_mode,
+                "live_submission": self.live,
+            },
+        )
+
+    async def _run_search(self) -> Path:
+        c = self.config.search
+        runners: dict[str, Any] = {
+            "claude": self._claude_runner(
+                self.config.claude.integrated_profile_dir
+            ),
+            "codex": self._codex_runner(),
+        }
+        duration = max(1, int(min(c.duration_minutes, self.duration_minutes) * 60))
+        search_config = SearchRunConfig(
+            assets_dir=self.assets_dir,
+            output_root=self.search_root,
+            prompt_spec=c.prompt_spec,
+            duration_s=duration,
+            competition_mode=self.competition_mode,
+            analyst_backend=c.analyst_backend,
+            research_backends=c.research_backends,
+        )
+        try:
+            session = await SearchOrchestrator(search_config, runners=runners).execute()
+            self._event("search_finished", session=str(session))
+            return session
+        finally:
+            await asyncio.gather(
+                *(runner.terminate_all() for runner in runners.values()),
+                return_exceptions=True,
+            )
+
+    def _search_asset_snapshot(self) -> Path | None:
+        for path in sorted(
+            self.search_root.glob("search-*/work/analyst/SEARCH_BUNDLE/ORIGINAL_ASSETS")
+        ):
+            sums = path.parent / "SHA256SUMS"
+            if path.is_dir() and sums.is_file():
+                try:
+                    _verify_sha256sums(path, sums)
+                    return path
+                except Exception:  # noqa: BLE001
+                    continue
+        return None
+
+    async def _wait_for_assets(self, search_task: asyncio.Task | None) -> Path:
+        deadline = time.monotonic() + min(300, self.duration_minutes * 60)
+        while search_task is not None and time.monotonic() < deadline:
+            snapshot = self._search_asset_snapshot()
+            if snapshot:
+                self._event("official_assets_ready", path=str(snapshot))
+                return snapshot
+            if search_task and search_task.done():
+                break
+            await asyncio.sleep(1)
+
+        # Search 未启用或在资产阶段失败时，控制器只做同样的确定性只读快照；
+        # 不让一个研究模块故障同时杀死两条独立兜底线。
+        fallback_root = self.shared / "OFFICIAL_ASSETS"
+        snapshot = snapshot_assets(
+            self.assets_dir,
+            fallback_root,
+            sha256sums_path=self.shared / "SHA256SUMS",
+            manifest_path=self.shared / "ASSET_MANIFEST.json",
+        )
+        self._fallback_snapshot = snapshot
+        self._event("official_assets_fallback_snapshot", path=str(fallback_root))
+        return fallback_root
+
+    def _prepare_direct_lane(self, lane: str, assets: Path) -> Path:
+        workdir = self.lanes / lane
+        (workdir / "outbox").mkdir(parents=True, exist_ok=True)
+        _link(assets, workdir / "OFFICIAL_ASSETS")
+        self.eval_root.mkdir(parents=True, exist_ok=True)
+        _link(self.eval_root, workdir / "SHARED_EVALUATION")
+        feedback = self.control / "feedback" / f"{lane}.jsonl"
+        feedback.parent.mkdir(parents=True, exist_ok=True)
+        feedback.touch(exist_ok=True)
+        _link(feedback, workdir / "FEEDBACK.jsonl")
+        return workdir
+
+    def _find_bundle(self, search_session: Path | None) -> Path | None:
+        if search_session:
+            status = read_json(search_session / "RUN_STATUS.json", {})
+            candidate = Path(status.get("bundle_dir", "")) if status else None
+            if candidate and candidate.is_dir() and all(
+                (candidate / name).is_file() for name in _REQUIRED_SEARCH
+            ):
+                _verify_sha256sums(candidate / "ORIGINAL_ASSETS", candidate / "SHA256SUMS")
+                return candidate
+        return None
+
+    async def _start_hearsay(
+        self, *, bundle: Path | None, assets: Path,
+        exploration_deadline: float, submission_mode: str,
+    ) -> int:
+        remaining_minutes = max(1.0, (exploration_deadline - time.monotonic()) / 60)
+        h = self.config.hearsay
+        command = [
+            sys.executable, "-m", "native.main", "--slug", self.slug,
+            "--workspace-dir", str(self.hearsay_ws),
+            "--input-dir", str(assets),
+            "--external-broker-dir", str(self.control),
+            "--submission-mode-hint", submission_mode,
+            "--mode", "competition", "--model", h.model,
+            "--effort", h.effort, "--solvers", str(h.solvers),
+            "--deadline-min", str(remaining_minutes),
+            "--rounds", str(h.rounds), "--max-turns", str(h.max_turns),
+        ]
+        if bundle:
+            command.extend(["--search-bundle", str(bundle)])
+        env = {
+            key: value for key, value in os.environ.items()
+            if key in {
+                "PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TERM",
+                "TMPDIR", "SSL_CERT_FILE", "SSL_CERT_DIR", "HTTP_PROXY",
+                "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "CUDA_VISIBLE_DEVICES",
+            }
+        }
+        home = self.lanes / ".hearsay_home"; home.mkdir(exist_ok=True)
+        env["HOME"] = str(home)
+        env["CLAUDE_CONFIG_DIR"] = str(
+            self.config.claude.integrated_profile_dir
+        )
+        env["PYTHONUNBUFFERED"] = "1"
+        log = self.control / "hearsay.stdout.log"
+        err = self.control / "hearsay.stderr.log"
+        with log.open("wb") as stdout, err.open("wb") as stderr:
+            process = await asyncio.create_subprocess_exec(
+                *command, cwd=str(ROOT), env=env, stdout=stdout, stderr=stderr,
+                start_new_session=True,
+            )
+            self._hearsay_process = process
+            self._event("hearsay_started", pid=process.pid, bundle=str(bundle or ""))
+            try:
+                return await process.wait()
+            finally:
+                self._hearsay_process = None
+
+    async def _stop_hearsay(self) -> None:
+        process = self._hearsay_process
+        if process is None or process.returncode is not None:
+            return
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(process.pid, signal.SIGTERM)
+        try:
+            await asyncio.wait_for(process.wait(), timeout=10)
+        except TimeoutError:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+
+    def _register_direct(self, registry: CandidateRegistry, lane: str) -> int:
+        count = 0
+        outbox = self.lanes / lane / "outbox"
+        for candidate in sorted(outbox.iterdir() if outbox.exists() else []):
+            if not candidate.is_dir() or not (candidate / "READY").is_file():
+                continue
+            try:
+                before = len(registry.records())
+                registry.register(candidate, source_lane=lane)
+                count += len(registry.records()) > before
+            except Exception as exc:  # noqa: BLE001
+                self._event(
+                    "candidate_rejected", lane=lane, path=str(candidate),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+        return count
+
+    def _register_hearsay(self, registry: CandidateRegistry) -> int:
+        count = 0
+        for solver in sorted(self.hearsay_ws.glob("solver_*")):
+            if not (solver / "out" / "submission.csv").is_file():
+                continue
+            try:
+                fingerprint = candidate_fingerprint(solver)
+            except Exception:
+                continue
+            previous, stable_count = self._stable.get(str(solver), ("", 0))
+            stable_count = stable_count + 1 if previous == fingerprint else 1
+            self._stable[str(solver)] = (fingerprint, stable_count)
+            if stable_count < 2:
+                continue
+            manifest = {
+                "schema_version": 1,
+                "candidate_id": f"{solver.name}-{fingerprint[:10]}",
+                "source_lane": "hearsay",
+                "submission_mode": "unknown",
+                "accelerator": "p100",
+                "purpose": f"stable HearSay snapshot from {solver.name}",
+            }
+            try:
+                before = len(registry.records())
+                registry.register(solver, source_lane="hearsay", manifest=manifest)
+                count += len(registry.records()) > before
+            except Exception as exc:  # noqa: BLE001
+                self._event(
+                    "candidate_rejected", lane="hearsay", path=str(solver),
+                    error=f"{type(exc).__name__}: {exc}",
+                )
+        return count
+
+    async def _monitor(
+        self, *, registry: CandidateRegistry, broker: SubmissionBroker,
+        started: float, deadline: float, exploration_deadline: float,
+        submission_deadline: float,
+    ) -> None:
+        last_scores = 0.0
+        contract_frozen = False
+        active_submissions: set[asyncio.Task] = set()
+        while time.monotonic() < deadline:
+            completed = {task for task in active_submissions if task.done()}
+            for task in completed:
+                try:
+                    submission = task.result()
+                    if submission:
+                        self._event("broker_submission", submission=submission)
+                except Exception as exc:  # noqa: BLE001
+                    self._event(
+                        "broker_background_error",
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+            active_submissions.difference_update(completed)
+            if not contract_frozen and self.hearsay_ws.exists():
+                try:
+                    contract = freeze_contract(
+                        self.hearsay_ws, self.eval_root,
+                        direction=self.config.run.metric_direction,
+                    )
+                    contract_frozen = True
+                    self._event("evaluation_contract_frozen", **contract)
+                except (FileNotFoundError, ValueError):
+                    pass
+            added = self._register_direct(registry, "codex")
+            added += self._register_direct(registry, "claude")
+            if self.hearsay_ws.exists():
+                added += self._register_hearsay(registry)
+            if contract_frozen:
+                registry.refresh_evaluations()
+            elapsed = time.monotonic() - started
+            fraction = min(1.0, elapsed / max(deadline - started, 1))
+            if time.monotonic() < submission_deadline:
+                while (
+                    len(active_submissions)
+                    < self.config.run.max_inflight_submissions
+                ):
+                    active_submissions.add(asyncio.create_task(asyncio.to_thread(
+                        broker.tick, fraction_elapsed=fraction,
+                        force_final=time.monotonic() >= exploration_deadline,
+                    )))
+            else:
+                # 最后缓冲只轮询和恢复，不再启动一个可能越过截止线的新 kernel。
+                broker.write_status(fraction_elapsed=fraction)
+            if time.monotonic() - last_scores >= 60:
+                updates = await asyncio.to_thread(broker.refresh_scores)
+                if updates:
+                    self._event("leaderboard_feedback", updates=updates)
+                last_scores = time.monotonic()
+            if added:
+                self._event("candidates_registered", count=added)
+            await asyncio.sleep(self.config.run.poll_seconds)
+        # submission_deadline 已为这些调用预留了完成时间；不得把线程丢在后台。
+        for submission in await asyncio.gather(
+            *active_submissions, return_exceptions=True
+        ):
+            if isinstance(submission, dict):
+                self._event("broker_submission", submission=submission)
+            elif isinstance(submission, BaseException):
+                self._event(
+                    "broker_background_error",
+                    error=f"{type(submission).__name__}: {submission}",
+                )
+
+    async def run(self) -> Path:
+        self._prepare()
+        started = time.monotonic()
+        deadline = started + self.duration_minutes * 60
+        stop_before = min(
+            self.config.run.stop_exploration_minutes_before_end,
+            max(0.0, self.duration_minutes * 0.45),
+        )
+        exploration_deadline = deadline - stop_before * 60
+        submission_deadline = deadline - min(
+            self.config.run.submission_only_minutes_before_end,
+            max(0.0, self.duration_minutes * 0.20),
+        ) * 60
+        search_task: asyncio.Task | None = None
+        if self.config.search.enabled:
+            search_task = asyncio.create_task(self._run_search())
+        assets = await self._wait_for_assets(search_task)
+
+        codex_work = self._prepare_direct_lane("codex", assets)
+        claude_work = self._prepare_direct_lane("claude", assets)
+        if self.live:
+            adapter: Any = KaggleAdapter(
+                slug=self.slug, root=self.control, kaggle_user=self.kaggle_user,
+                submission_mode=self.config.run.submission_mode,
+            )
+            remaining = await asyncio.to_thread(adapter.remaining_today)
+            if remaining is None:
+                raise RuntimeError(
+                    "live mode could not establish Kaggle remaining-today quota; "
+                    "refusing to create a second, guessed budget"
+                )
+            max_submissions = min(self.config.run.max_submissions, remaining)
+            submission_mode = await asyncio.to_thread(adapter.detect_mode)
+        else:
+            adapter = DryRunAdapter(self.slug, self.control)
+            max_submissions = self.config.run.max_submissions
+            submission_mode = (
+                self.config.run.submission_mode
+                if self.config.run.submission_mode != "auto" else "kernel"
+            )
+        if max_submissions <= 0:
+            raise RuntimeError("Kaggle reports zero remaining submissions")
+
+        registry = CandidateRegistry(
+            self.control / "candidates", assets=assets, evaluation=self.eval_root
+        )
+        broker = SubmissionBroker(
+            self.control, registry=registry, adapter=adapter,
+            max_submissions=max_submissions,
+            final_reserve=min(self.config.run.final_reserve, max_submissions - 1),
+            initial_calibrations=min(
+                self.config.run.initial_calibrations, max(0, max_submissions - 1)
+            ),
+            final_start_fraction=self.config.run.final_start_fraction,
+            anti_monopoly_fraction=self.config.run.anti_monopoly_fraction,
+            min_local_gain=self.config.run.min_local_gain,
+            direction=self.config.run.metric_direction,
+        )
+
+        codex_runner = self._codex_runner()
+        claude_runner = self._claude_runner(
+            self.config.claude.direct_profile_dir
+        )
+        direct_tasks = [
+            asyncio.create_task(run_lane_loop(
+                lane="codex", runner=codex_runner,
+                prompt=direct_prompt(
+                    lane="codex", slug=self.slug, workdir=codex_work,
+                    deadline_minutes=max(1, (exploration_deadline-started)/60),
+                ),
+                continuation=continuation_prompt("codex"), workdir=codex_work,
+                trace_dir=self.control / "trajectories" / "codex",
+                deadline_monotonic=exploration_deadline,
+                turn_seconds=self.config.codex.turn_minutes * 60,
+                max_rounds=self.config.codex.max_rounds,
+            )),
+            asyncio.create_task(run_lane_loop(
+                lane="claude", runner=claude_runner,
+                prompt=direct_prompt(
+                    lane="claude", slug=self.slug, workdir=claude_work,
+                    deadline_minutes=max(1, (exploration_deadline-started)/60),
+                ),
+                continuation=continuation_prompt("claude"), workdir=claude_work,
+                trace_dir=self.control / "trajectories" / "claude",
+                deadline_monotonic=exploration_deadline,
+                turn_seconds=self.config.claude.turn_minutes * 60,
+                max_rounds=self.config.claude.max_rounds,
+            )),
+        ]
+
+        async def search_then_hearsay() -> int:
+            search_session: Path | None = None
+            if search_task:
+                try:
+                    search_session = await search_task
+                except Exception as exc:  # noqa: BLE001
+                    self._event("search_failed", error=f"{type(exc).__name__}: {exc}")
+            bundle = self._find_bundle(search_session)
+            self._event(
+                "search_handoff", status="verified_bundle" if bundle else "raw_assets_fallback",
+                bundle=str(bundle or ""), bundle_sha256=tree_hash(bundle) if bundle else "",
+            )
+            if not self.config.hearsay.enabled or time.monotonic() >= exploration_deadline:
+                return 0
+            return await self._start_hearsay(
+                bundle=bundle, assets=assets,
+                exploration_deadline=exploration_deadline,
+                submission_mode=submission_mode,
+            )
+
+        hearsay_task = asyncio.create_task(search_then_hearsay())
+        monitor_task = asyncio.create_task(self._monitor(
+            registry=registry, broker=broker, started=started, deadline=deadline,
+            exploration_deadline=exploration_deadline,
+            submission_deadline=submission_deadline,
+        ))
+        try:
+            await asyncio.sleep(max(0, exploration_deadline - time.monotonic()))
+            self._event("exploration_stopped")
+            await asyncio.gather(
+                codex_runner.terminate_all(), claude_runner.terminate_all(),
+                self._stop_hearsay(), return_exceptions=True,
+            )
+            for task in direct_tasks + [hearsay_task]:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*direct_tasks, hearsay_task, return_exceptions=True)
+            await monitor_task
+        finally:
+            if not monitor_task.done():
+                monitor_task.cancel()
+                await asyncio.gather(monitor_task, return_exceptions=True)
+            await asyncio.gather(
+                codex_runner.terminate_all(), claude_runner.terminate_all(),
+                self._stop_hearsay(), return_exceptions=True,
+            )
+
+        if self._fallback_snapshot:
+            verify_snapshot(self._fallback_snapshot, verify_source=True)
+        else:
+            sums = assets.parent / "SHA256SUMS"
+            if sums.is_file():
+                _verify_sha256sums(assets, sums)
+        final_status = read_json(self.status_path, {})
+        final_status.update({
+            "status": "complete", "finished_at": time.time(),
+            "evaluation_contract": read_json(self.eval_root / "contract.json"),
+            "broker": broker.write_status(fraction_elapsed=1.0),
+            "candidate_count": len(registry.records()),
+        })
+        atomic_json(self.status_path, final_status)
+        self._event("run_complete", status=str(self.status_path))
+        return self.session
