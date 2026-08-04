@@ -457,8 +457,13 @@ async def run_solver(solver: str, ws: Path, args, budget: Budget,
                 "env", f"{solver} lost its session and was restarted — it keeps "
                        f"its files but not its reasoning.", src="harness")
 
+        # The 0.5 is a floor, so a solver near its cap still gets a usable
+        # round. With the cap removed it stopped being a floor and became the
+        # whole allowance: max(0 - 0, 0.5) = 0.5, every query cut off after one
+        # turn with "Reached maximum budget ($0.5)". Three solvers x forty
+        # rounds x ~$0.55, and the harness read it as forty stalled rounds.
         o = opts(solver, ws, args, budget, trace, append + extra,
-                 max(cap - spent, 0.5))
+                 max(cap - spent, 0.5) if cap else 0.0)
         clean = False
         try:
             async with ClaudeSDKClient(options=o) as client:

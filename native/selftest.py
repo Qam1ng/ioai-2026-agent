@@ -934,6 +934,20 @@ def test_api_failure() -> None:
           key.startswith("429:"), True)
 
     src = Path("native/main.py").read_text()
+    # The floor that ate a whole run: max(cap - spent, 0.5) is a sensible floor
+    # while cap > 0 and the entire allowance once cap is 0.
+    cap, spent = 0.0, 0.0
+    check("an uncapped solver gets no per-query ceiling",
+          (max(cap - spent, 0.5) if cap else 0.0) or None, None)
+    cap, spent = 27.0, 20.0
+    check("  a capped one still gets what is left",
+          max(cap - spent, 0.5) if cap else 0.0, 7.0)
+    cap, spent = 27.0, 26.9
+    check("  and never less than the floor",
+          max(cap - spent, 0.5) if cap else 0.0, 0.5)
+    check("and the code says so",
+          "max(cap - spent, 0.5) if cap else 0.0" in src, True)
+
     check("the trace keeps the HTTP status", "api_error_status" in src, True)
     check("  and the stop reason and error strings",
           'stop=getattr(msg, "stop_reason"' in src
