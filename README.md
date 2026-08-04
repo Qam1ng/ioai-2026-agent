@@ -121,6 +121,12 @@ Measured, not assumed:
 
 ![HearSay architecture](docs/hearsay.svg)
 
+What this branch adds sits on top of that, and is easier to see whole
+([`docs/hearsay-v2-evidence-firewall.svg`](docs/hearsay-v2-evidence-firewall.svg)
+— tinted boxes are new here, plain ones were already on `master`):
+
+![HearSay V2, the Evidence Firewall](docs/hearsay-v2-evidence-firewall.svg)
+
 Four Claude Code sessions run at once, none of them told what to do. Three
 solvers read the task, decide for themselves where they think it is won, and
 claim that angle on a shared board so the others take a different one. The
