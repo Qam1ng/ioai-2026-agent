@@ -135,6 +135,9 @@ solvers read the task, decide for themselves where they think it is won, and
 claim that angle on a shared board so the others take a different one. The
 fourth compiles the ruler everybody is measured with, then guards the door.
 
+The branch this one builds on, with its own additions tinted, is
+[`docs/hearsay-v2-evidence-firewall.svg`](docs/hearsay-v2-evidence-firewall.svg).
+
 For the whole thing as it actually runs — boot, the seven concurrent tasks, the
 deterministic layer, the four gates and the firewall — see
 [`docs/agent-system-asbuilt.svg`](docs/agent-system-asbuilt.svg):
