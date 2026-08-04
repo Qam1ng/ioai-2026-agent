@@ -198,6 +198,24 @@ the one already known to have cost 0.011. A validator that cannot reject a
 known-bad candidate has not been shown to work, so that candidate is replayed
 as a standing negative control on every run.
 
+**The two rulers were then made to disagree in public.** Retrospective
+agreement with a result you already know is weak evidence, so one submission
+slot went on the recipe where the rulers point opposite ways. Grouped five-fold
+promotes `crop_wide_mid` at +0.00894; leave-one-out rejects it at −0.00341. The
+predicted score was written into the sealed receipt and hashed *before* the
+file was sent:
+
+    registered prediction        0.92700  (band 0.005)
+    public score, 55228496       0.92477
+    absolute error               0.00223
+    account best it had to beat  0.93041
+
+The board sided with the calibrated ruler, 0.00564 below the incumbent, and the
+prediction landed inside its registered band. `seal --falsification-test` is
+the only door to that experiment: it refuses a recipe that *passed* the gate,
+records `promotion: false`, and will not write a verdict that was not
+registered in advance.
+
 Scarce-anchor behaviour is still recorded — six stress scenarios across five
 seeds, where crops *do* help by up to +0.021 — but it is diagnostics. Selection
 reads the calibrated ruler and nothing else.
@@ -207,6 +225,7 @@ reads the calibrated ruler and nothing else.
     python -m native.scripts.chicken_data_synthesis validate --run-root <r>
     python -m native.scripts.chicken_data_synthesis seal     --run-root <r>   # fails closed when nothing clears
     python -m native.scripts.chicken_data_synthesis audit    --run-root <r>
+    python -m native.scripts.chicken_data_synthesis record   --run-root <r> --submission-ref <id> --public-score <s>
 
 ## Supervision
 

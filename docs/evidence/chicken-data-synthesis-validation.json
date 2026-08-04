@@ -74,7 +74,7 @@
     "selected_ruler": "leave_one_out",
     "selection_rule": "smallest absolute gap between median query-to-fit and median test-to-train distance"
   },
-  "runtime_seconds": 185.93901801109314,
+  "runtime_seconds": 590.9941639900208,
   "schema_version": 1,
   "sealed_anchors": {
     "base_delta": 2.430868062397451e-08,
@@ -388,6 +388,41 @@
         }
       }
     }
+  },
+  "superseded_ruler": {
+    "direction_disagreements": [
+      "crop_all",
+      "crop_mid_tight",
+      "crop_wide",
+      "crop_wide_mid"
+    ],
+    "incumbent_score": 0.8908494655908779,
+    "note": "the ruler the previous runs selected on; kept to expose disagreement",
+    "ruler": "grouped_5fold",
+    "scores": {
+      "crop_all": [
+        0.8981275330210868
+      ],
+      "crop_all_mirrored": [
+        0.8900357472061253
+      ],
+      "crop_mid_tight": [
+        0.8959928264876666
+      ],
+      "crop_wide": [
+        0.8924642022126084
+      ],
+      "crop_wide_mid": [
+        0.899791633343075
+      ],
+      "incumbent_original_only": [
+        0.8908494655908779
+      ],
+      "mirror_only": [
+        0.884839748625593
+      ]
+    },
+    "would_have_promoted": "crop_wide_mid"
   },
   "task": "ioai-2025-chicken-counting-mirror-unofficial"
 }

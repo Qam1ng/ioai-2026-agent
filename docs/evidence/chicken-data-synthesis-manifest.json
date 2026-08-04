@@ -1,5 +1,5 @@
 {
-  "artifact_path": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260804-hearsay-datasynth-chicken-frozen-v2/outputs/synthetic_rows.npz",
+  "artifact_path": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260804-hearsay-datasynth-chicken-frozen-v3/outputs/synthetic_rows.npz",
   "artifact_sha256": "d5f6e70ff37ec76c2753676f9ebc2ebfcc1e6bd79df0314f3bca55c293799853",
   "crop_anchors": [
     [
@@ -43,7 +43,7 @@
   "label_provenance": "official train density maps only; no hidden label, no external data",
   "method": "native_scale_density_integral_crops_with_area_normalised_targets",
   "rows": 3200,
-  "runtime_seconds": 327.69887685775757,
+  "runtime_seconds": 1584.6830458641052,
   "schema_version": 1,
   "sealed_pipeline_reproduction": {
     "exact": true,

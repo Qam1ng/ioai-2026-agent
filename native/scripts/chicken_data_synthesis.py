@@ -926,6 +926,15 @@ def validate(run_root: Path) -> dict[str, Any]:
         blocks,
         mechanisms={"negative_control_dvr_timestamp": control},
     )
+    # What the ruler this component replaces would have said. Where the two
+    # disagree in direction is where a live submission is actually informative.
+    superseded = (
+        evaluate_under_ruler(
+            "grouped_5fold", x0, y0, synthetic, folds, blocks, mechanisms={}
+        )
+        if ruler != "grouped_5fold"
+        else None
+    )
     stress = evaluate_recipes(
         x0,
         y0,
@@ -959,6 +968,33 @@ def validate(run_root: Path) -> dict[str, Any]:
             "summary": summary,
             "selection_uses_public_score": False,
         },
+        "superseded_ruler": (
+            {
+                "ruler": "grouped_5fold",
+                "note": "the ruler the previous runs selected on; kept to expose disagreement",
+                "incumbent_score": superseded["incumbent_score"],
+                "scores": superseded["scores"],
+                "would_have_promoted": max(
+                    (
+                        name
+                        for name in superseded["scores"]
+                        if name != "incumbent_original_only"
+                    ),
+                    key=lambda name: superseded["scores"][name][0],
+                ),
+                "direction_disagreements": sorted(
+                    name
+                    for name in summary
+                    if name in superseded["scores"]
+                    and (
+                        superseded["scores"][name][0] > superseded["incumbent_score"]
+                    )
+                    != (summary[name]["mean_delta"] > 0)
+                ),
+            }
+            if superseded
+            else None
+        ),
         "stress_diagnostics": {
             "note": "scarce-anchor behaviour, recorded but never used to select",
             "scenarios": list(SCENARIOS),
@@ -1120,7 +1156,16 @@ def write_submission(path: Path, rows: list[dict[str, str]], counts, codec) -> d
     }
 
 
-def seal(run_root: Path) -> dict[str, Any]:
+def seal(run_root: Path, *, falsification_test: str | None = None) -> dict[str, Any]:
+    """Seal a candidate for submission.
+
+    Normally that means a recipe cleared the calibrated ruler.  The other door
+    is `falsification_test`, which seals a recipe the gate *rejected*, purely to
+    spend one slot checking whether the ruler's ranking survives contact with
+    the live board.  It registers the predicted score before the submission is
+    sent, and it is never a promotion: a retrospective negative control only
+    shows the ruler agrees with a result already known.
+    """
     import numpy as np
 
     run_root = run_root.resolve()
@@ -1136,14 +1181,49 @@ def seal(run_root: Path) -> dict[str, Any]:
         raise FileExistsError("candidate already sealed")
 
     validation = load_object(run_root / "outputs/synthetic_validation_receipt.json")
-    recipe_name = validation["selected_recipe"]
-    if not recipe_name:
-        raise ValueError("no recipe cleared the gate; the incumbent stands")
     evidence = validation["selection_evidence"]
     if evidence["ruler"] != validation["ruler_calibration"]["selected_ruler"]:
         raise ValueError("selection evidence was not produced under the calibrated ruler")
-    if not evidence["summary"][recipe_name]["pass"]:
-        raise ValueError("selected recipe does not carry a passing gate")
+
+    prediction_registry: dict[str, Any] | None = None
+    if falsification_test:
+        recipe_name = falsification_test
+        if recipe_name not in recipe_table():
+            raise ValueError(f"unknown recipe: {recipe_name}")
+        if evidence["summary"][recipe_name]["pass"]:
+            raise ValueError(
+                "this recipe passed the gate; seal it as a promotion, not as a test"
+            )
+        candidate_score = evidence["scores"][recipe_name][0]
+        incumbent_score = evidence["incumbent_score"]
+        offset = ACCOUNT_PUBLIC_BEST - incumbent_score
+        prediction_registry = {
+            "purpose": "prospective test of the calibrated ruler, not a promotion",
+            "registered_before_submission": True,
+            "ruler": evidence["ruler"],
+            "candidate_score_under_ruler": candidate_score,
+            "incumbent_score_under_ruler": incumbent_score,
+            "delta_under_ruler": candidate_score - incumbent_score,
+            "account_public_best_for_the_same_estimator": ACCOUNT_PUBLIC_BEST,
+            "ruler_to_board_offset": offset,
+            "predicted_public_score": candidate_score + offset,
+            "prediction_band": 0.005,
+            "falsified_if": (
+                f"public score exceeds {ACCOUNT_PUBLIC_BEST}, which would mean the "
+                "ruler ranked a synthetic recipe below the incumbent when the board "
+                "ranks it above"
+            ),
+            "confirmed_if": (
+                f"public score lands below {ACCOUNT_PUBLIC_BEST} and within 0.005 of "
+                f"{candidate_score + offset:.5f}"
+            ),
+        }
+    else:
+        recipe_name = validation["selected_recipe"]
+        if not recipe_name:
+            raise ValueError("no recipe cleared the gate; the incumbent stands")
+        if not evidence["summary"][recipe_name]["pass"]:
+            raise ValueError("selected recipe does not carry a passing gate")
     tags = recipe_table()[recipe_name]
 
     source_root = Path(contract["source_root"])
@@ -1235,7 +1315,11 @@ def seal(run_root: Path) -> dict[str, Any]:
 
     receipt = {
         "schema_version": SCHEMA_VERSION,
-        "status": "sealed_awaiting_submission",
+        "status": (
+            "sealed_falsification_test" if falsification_test else "sealed_awaiting_submission"
+        ),
+        "promotion": not falsification_test,
+        "prediction_registry": prediction_registry,
         "task": TASK,
         "selected_recipe": recipe_name,
         "selected_recipe_tags": tags,
@@ -1263,8 +1347,12 @@ def seal(run_root: Path) -> dict[str, Any]:
     run_root.joinpath("runtime/selection_receipt.sha256").write_text(f"{digest}\n", encoding="ascii")
     return {
         "sealed": True,
+        "promotion": not falsification_test,
         "selected_recipe": recipe_name,
         "fitting_rows": receipt["fitting_rows"],
+        "predicted_public_score": (
+            prediction_registry["predicted_public_score"] if prediction_registry else None
+        ),
         "submission_path": outputs["run_a"]["submission_path"],
         "submission_sha256": outputs["run_a"]["submission_sha256"],
         "receipt_sha256": digest,
@@ -1290,20 +1378,81 @@ def audit(run_root: Path) -> dict[str, Any]:
             raise ValueError("submission changed after sealing")
         if sha256_file(Path(item["counts_path"])) != item["counts_sha256"]:
             raise ValueError("counts changed after sealing")
+    registered = receipt.get("prediction_registry")
     allowed = bool(
-        receipt["gate"]["pass"]
+        (receipt["gate"]["pass"] or (registered and registered["registered_before_submission"]))
         and receipt["duplicate_generation_byte_identical"]
         and contract["submission_policy"]["submission_slots_authorized"] == 1
     )
     return {
         "valid": True,
         "sealed": True,
+        "promotion": receipt["promotion"],
         "submission_allowed": allowed,
         "selected_recipe": receipt["selected_recipe"],
+        "predicted_public_score": (
+            registered["predicted_public_score"] if registered else None
+        ),
         "submission_path": receipt["outputs"]["run_a"]["submission_path"],
         "submission_sha256": receipt["outputs"]["run_a"]["submission_sha256"],
         "public_score_required_for_git_push": REPO_PUBLIC_INCUMBENT,
     }
+
+
+def record(run_root: Path, submission_ref: str, public_score: float) -> dict[str, Any]:
+    """Bind a live public score to the sealed candidate and score the prediction.
+
+    For a falsification test this is the only place the verdict is written, and
+    it is written against a prediction that was already on disk and hashed
+    before the submission was sent.
+    """
+    run_root = run_root.resolve()
+    receipt = load_object(run_root / "runtime/selection_receipt.json")
+    sealed_digest = sha256_file(run_root / "runtime/selection_receipt.json")
+    if sealed_digest != run_root.joinpath("runtime/selection_receipt.sha256").read_text(
+        encoding="ascii"
+    ).strip():
+        raise ValueError("selection receipt differs from pinned hash")
+    submission = Path(receipt["outputs"]["run_a"]["submission_path"])
+    if sha256_file(submission) != receipt["outputs"]["run_a"]["submission_sha256"]:
+        raise ValueError("submitted file no longer matches the sealed candidate")
+
+    registry = receipt.get("prediction_registry")
+    outcome: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "task": TASK,
+        "submission_ref": str(submission_ref),
+        "public_score": public_score,
+        "selection_receipt_sha256": sealed_digest,
+        "submission_sha256": receipt["outputs"]["run_a"]["submission_sha256"],
+        "selected_recipe": receipt["selected_recipe"],
+        "promotion": receipt["promotion"],
+        "account_public_best_before": ACCOUNT_PUBLIC_BEST,
+        "repo_public_incumbent": REPO_PUBLIC_INCUMBENT,
+        "beats_repo_public_incumbent": public_score > REPO_PUBLIC_INCUMBENT,
+        "git_push_on_score_improvement": public_score > REPO_PUBLIC_INCUMBENT,
+    }
+    if registry:
+        error = public_score - registry["predicted_public_score"]
+        outcome["prediction_check"] = {
+            "predicted_public_score": registry["predicted_public_score"],
+            "prediction_band": registry["prediction_band"],
+            "absolute_error": abs(error),
+            "within_band": abs(error) <= registry["prediction_band"],
+            "calibrated_ruler_direction_held": public_score < ACCOUNT_PUBLIC_BEST,
+            "verdict": (
+                "calibrated ruler confirmed prospectively"
+                if public_score < ACCOUNT_PUBLIC_BEST
+                and abs(error) <= registry["prediction_band"]
+                else "calibrated ruler falsified"
+            ),
+        }
+    write_json(run_root / "runtime/kaggle_submission_receipt.json", outcome, exclusive=True)
+    digest = sha256_file(run_root / "runtime/kaggle_submission_receipt.json")
+    run_root.joinpath("runtime/kaggle_submission_receipt.sha256").write_text(
+        f"{digest}\n", encoding="ascii"
+    )
+    return outcome
 
 
 def parser() -> argparse.ArgumentParser:
@@ -1320,6 +1469,19 @@ def parser() -> argparse.ArgumentParser:
     for name in ("validate", "seal", "audit"):
         child = sub.add_parser(name)
         child.add_argument("--run-root", type=Path, required=True)
+        if name == "seal":
+            child.add_argument(
+                "--falsification-test",
+                metavar="RECIPE",
+                help=(
+                    "seal a gate-rejected recipe as a prospective test of the ruler, "
+                    "registering its predicted public score before submission"
+                ),
+            )
+    log = sub.add_parser("record")
+    log.add_argument("--run-root", type=Path, required=True)
+    log.add_argument("--submission-ref", required=True)
+    log.add_argument("--public-score", type=float, required=True)
     return value
 
 
@@ -1337,8 +1499,10 @@ def main() -> None:
             result = synthesize(args.run_root, args.source_root)
         elif args.command == "validate":
             result = validate(args.run_root)
+        elif args.command == "record":
+            result = record(args.run_root, args.submission_ref, args.public_score)
         elif args.command == "seal":
-            result = seal(args.run_root)
+            result = seal(args.run_root, falsification_test=args.falsification_test)
         else:
             result = audit(args.run_root)
         print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))

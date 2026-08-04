@@ -79,7 +79,10 @@ Measured, not assumed:
   candidate that cost 0.011 of public score had been measured leave-one-out
   against a baseline measured five-fold grouped; 80% of its claimed +0.0365 was
   that mismatch and nothing else. Which ruler matches the live test set is now
-  measured from the feature geometry before anything is scored. See
+  measured from the feature geometry before anything is scored, and the new
+  ruler was checked prospectively rather than retrospectively: on the one recipe
+  where old and new point opposite ways, the registered prediction was 0.92700
+  and the board returned 0.92477. See
   [Data synthesis and the ruler](native/README.md#data-synthesis-and-the-ruler).
 
 ## Earlier status (Practice Task 1, single-agent era)

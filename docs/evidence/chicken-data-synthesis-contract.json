@@ -51,10 +51,10 @@
     "mechanism": "same_session_dvr_timestamp_smoothing",
     "timestamps_path": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260803-hearsay-v2-chicken-timestamp-frozen-v1/outputs/timestamps.json"
   },
-  "run_root": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260804-hearsay-datasynth-chicken-frozen-v2",
+  "run_root": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260804-hearsay-datasynth-chicken-frozen-v3",
   "runner": {
     "path": "/Users/bytedance/Documents/IOAI/ioai-2026-agent/native/scripts/chicken_data_synthesis.py",
-    "sha256": "c26cd352f17d546fc0075aba2737db4713c2e98af5a2684afc534070b759018e"
+    "sha256": "090e797f5dbccc0ae73a18e18eaac110531cff5481c52f6551af07a3fc3a76b1"
   },
   "schema_version": 1,
   "source_root": "/Users/bytedance/Documents/IOAI/ioai-historical/runs/20260730-095001-chicken-counting-forge-v4",
