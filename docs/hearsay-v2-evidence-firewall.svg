@@ -1,0 +1,201 @@
+<svg viewBox="0 0 900 1400" width="900" height="1400" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<rect width="900" height="1400" fill="#ffffff"/>
+<defs>
+<marker id="ar" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+<path d="M0 1 L9 5 L0 9 z" fill="#9a9a94"/>
+</marker>
+<marker id="arb" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+<path d="M0 1 L9 5 L0 9 z" fill="#c9c6bb"/>
+</marker>
+</defs>
+
+<text x="40" y="46" font-size="22" fill="#1a1a18">HearSay V2 &#8212; the Evidence Firewall</text>
+<text x="40" y="70" font-size="13.5" fill="#6b6b66">agent/hearsay-evidence-firewall-v2 &#183; 4f74f57 &#183; the agent kernel stays permissive; the benchmark claim does not</text>
+
+<rect x="40" y="90" width="164" height="26" rx="13" fill="#efeade" stroke="#cfc6ac"/>
+<text x="56" y="108" font-size="12.5" fill="#5f5e5a">added by this PR</text>
+<rect x="216" y="90" width="176" height="26" rx="13" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="232" y="108" font-size="12.5" fill="#5f5e5a">already on master</text>
+<rect x="404" y="90" width="164" height="26" rx="13" fill="#f1efe8"/>
+<text x="420" y="108" font-size="12.5" fill="#5f5e5a">Claude Code session</text>
+
+<!-- ONE COMMAND -->
+<text x="40" y="152" font-size="12.5" fill="#888882">ONE COMMAND &#8212; the mode is chosen here and cannot be changed later</text>
+<rect x="40" y="164" width="820" height="48" rx="10" fill="#efeade" stroke="#cfc6ac"/>
+<text x="60" y="194" font-size="12" fill="#2c2c2a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">python -m native.main --mode competition|clean-benchmark --slug &lt;comp&gt; --solvers 3 --model claude-opus-5</text>
+
+<!-- BOOT -->
+<text x="40" y="250" font-size="12.5" fill="#888882">BOOT &#8212; deterministic, and finished before any agent starts</text>
+<g font-size="12.5">
+<rect x="40" y="262" width="196" height="66" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="138" y="288" text-anchor="middle" fill="#2c2c2a">read the task</text>
+<text x="138" y="308" font-size="11.5" text-anchor="middle" fill="#7a7a74">once, not four times</text>
+<rect x="248" y="262" width="196" height="66" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="346" y="288" text-anchor="middle" fill="#2c2c2a">fetch and verify data</text>
+<text x="346" y="308" font-size="11.5" text-anchor="middle" fill="#7a7a74">hashed, not assumed</text>
+<rect x="456" y="262" width="196" height="66" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="554" y="288" text-anchor="middle" fill="#2c2c2a">recon.py</text>
+<text x="554" y="308" font-size="11.5" text-anchor="middle" fill="#7a7a74">leaks &#183; duplicates &#183; format</text>
+<rect x="664" y="262" width="196" height="66" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="762" y="288" text-anchor="middle" fill="#2c2c2a">quota and backend</text>
+<text x="762" y="308" font-size="11.5" text-anchor="middle" fill="#7a7a74">CSV or kernel &#183; slots left</text>
+</g>
+<line x1="240" y1="328" x2="240" y2="352" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+<line x1="660" y1="328" x2="660" y2="352" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+
+<rect x="40" y="358" width="404" height="68" rx="10" fill="#efeade" stroke="#cfc6ac"/>
+<text x="60" y="380" font-size="12.5" fill="#2c2c2a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">run_contract.json</text>
+<text x="60" y="399" font-size="11.5" fill="#7a7a74">pins mode, model, routes, budget, deadline and</text>
+<text x="60" y="415" font-size="11.5" fill="#7a7a74">submit authority. Tampering is detected, not trusted.</text>
+
+<rect x="456" y="358" width="404" height="68" rx="10" fill="#efeade" stroke="#cfc6ac"/>
+<text x="476" y="380" font-size="12.5" fill="#2c2c2a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">evidence/firewall.json</text>
+<text x="476" y="399" font-size="11.5" fill="#7a7a74">mode, tainted lineages, immutable reveal records and</text>
+<text x="476" y="415" font-size="11.5" fill="#7a7a74">candidate evidence &#8212; held outside every solver's reach</text>
+
+<!-- CONCURRENT -->
+<text x="40" y="458" font-size="12.5" fill="#888882">THEN SEVEN THINGS RUN AT ONCE, each its own process and context</text>
+
+<rect x="40" y="470" width="238" height="76" rx="10" fill="#f1efe8"/>
+<text x="60" y="494" font-size="13" fill="#2c2c2a">evaluator</text>
+<text x="60" y="513" font-size="11.5" fill="#7a7a74">compiles the ruler once: metric.py</text>
+<text x="60" y="529" font-size="11.5" fill="#7a7a74">and folds.json, then holds gate 4</text>
+
+<rect x="40" y="556" width="238" height="52" rx="10" fill="#f1efe8"/>
+<text x="60" y="578" font-size="13" fill="#2c2c2a">solver_a</text>
+<text x="60" y="596" font-size="11.5" fill="#7a7a74">no assigned approach, no submit tool</text>
+<rect x="40" y="616" width="238" height="52" rx="10" fill="#f1efe8"/>
+<text x="60" y="638" font-size="13" fill="#2c2c2a">solver_b</text>
+<text x="60" y="656" font-size="11.5" fill="#7a7a74">identical contract, differs in nothing</text>
+<rect x="40" y="676" width="238" height="52" rx="10" fill="#f1efe8"/>
+<text x="60" y="698" font-size="13" fill="#2c2c2a">solver_c</text>
+<text x="60" y="716" font-size="11.5" fill="#7a7a74">prompts are Chinese, preset untouched</text>
+
+<rect x="316" y="470" width="252" height="258" rx="10" fill="#efeade" stroke="#cfc6ac"/>
+<text x="336" y="494" font-size="13" fill="#2c2c2a">the board, rewritten</text>
+<text x="336" y="512" font-size="11.5" fill="#7a7a74" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">facts.jsonl</text>
+<text x="336" y="530" font-size="11.5" fill="#7a7a74">append-only, hash-chained, no LLM</text>
+<line x1="336" y1="542" x2="548" y2="542" stroke="#ded7c4" stroke-width="1"/>
+<g font-size="11.5">
+<text x="336" y="562" fill="#2c2c2a">claim</text><text x="424" y="562" fill="#7a7a74">so others take another angle</text>
+<text x="336" y="582" fill="#2c2c2a">adoption</text><text x="424" y="582" fill="#7a7a74">must point at another route</text>
+<text x="336" y="602" fill="#2c2c2a">conflict</text><text x="424" y="602" fill="#7a7a74">needs explicit resolution</text>
+<text x="336" y="622" fill="#2c2c2a">data</text><text x="424" y="622" fill="#7a7a74">a leak, a duplicate, an anomaly</text>
+<text x="336" y="642" fill="#2c2c2a">format</text><text x="424" y="642" fill="#7a7a74">a submission trap</text>
+<text x="336" y="662" fill="#2c2c2a">failure</text><text x="424" y="662" fill="#7a7a74">what did not work, and why</text>
+<text x="336" y="682" fill="#b4574a">result</text><text x="424" y="682" fill="#7a7a74">evaluator and harness only</text>
+<text x="336" y="702" fill="#b4574a">decision</text><text x="424" y="702" fill="#7a7a74">evaluator only, evidence-bound</text>
+</g>
+<text x="336" y="720" font-size="11" fill="#888882">self-adoption and invented IDs are rejected</text>
+
+<rect x="606" y="470" width="254" height="76" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="626" y="494" font-size="13" fill="#2c2c2a">submitter</text>
+<text x="626" y="513" font-size="11.5" fill="#7a7a74">walks the four gates below and is</text>
+<text x="626" y="529" font-size="11.5" fill="#7a7a74">the only thing that may send</text>
+
+<rect x="606" y="556" width="254" height="76" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="626" y="580" font-size="13" fill="#2c2c2a">reconciler</text>
+<text x="626" y="599" font-size="11.5" fill="#7a7a74">Kaggle's submission count against</text>
+<text x="626" y="615" font-size="11.5" fill="#7a7a74">ours &#183; GPU trespass &#183; orphans &#183; cost</text>
+
+<rect x="606" y="642" width="254" height="86" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="626" y="666" font-size="13" fill="#2c2c2a">score watcher</text>
+<text x="626" y="685" font-size="11.5" fill="#7a7a74">brings the board score back and</text>
+<text x="626" y="701" font-size="11.5" fill="#7a7a74">posts the gap, so a solver learns</text>
+<text x="626" y="717" font-size="11.5" fill="#7a7a74">whether its own numbers can be trusted</text>
+
+<line x1="278" y1="508" x2="312" y2="508" stroke="#c9c6bb" stroke-width="1.2" marker-end="url(#arb)"/>
+<line x1="278" y1="582" x2="312" y2="582" stroke="#c9c6bb" stroke-width="1.2" marker-end="url(#arb)"/>
+<line x1="278" y1="642" x2="312" y2="642" stroke="#c9c6bb" stroke-width="1.2" marker-end="url(#arb)"/>
+<line x1="278" y1="702" x2="312" y2="702" stroke="#c9c6bb" stroke-width="1.2" marker-end="url(#arb)"/>
+<line x1="568" y1="508" x2="602" y2="508" stroke="#c9c6bb" stroke-width="1.2" marker-end="url(#arb)"/>
+<line x1="602" y1="680" x2="572" y2="680" stroke="#c9c6bb" stroke-width="1.2" marker-end="url(#arb)"/>
+
+<rect x="40" y="748" width="820" height="46" rx="10" fill="#efeade" stroke="#cfc6ac"/>
+<text x="60" y="770" font-size="12.5" fill="#2c2c2a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">route_coordination.json</text>
+<text x="60" y="788" font-size="11.5" fill="#7a7a74">did the routes actually adopt one another's stable fact IDs, or did three end-to-end races just share a log? The receipt says which.</text>
+
+<!-- DETERMINISTIC LAYER -->
+<text x="40" y="830" font-size="12.5" fill="#888882">THE DETERMINISTIC LAYER &#8212; every constraint that matters is a script, not an instruction</text>
+<rect x="40" y="842" width="820" height="106" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<g font-size="11.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#2c2c2a">
+<text x="60" y="866">folds.py</text><text x="200" y="866">checkfolds.py</text><text x="360" y="866">evaluate.py</text><text x="520" y="866">check_format.py</text><text x="700" y="866">recon.py</text>
+</g>
+<g font-size="10.5" fill="#7a7a74">
+<text x="60" y="880">the split</text><text x="200" y="880">and its contract</text><text x="360" y="880">scores out/oof.npy</text><text x="520" y="880">fatal vs unknown</text><text x="700" y="880">before anyone starts</text>
+</g>
+<rect x="52" y="890" width="796" height="46" rx="6" fill="#efeade"/>
+<g font-size="11.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#2c2c2a">
+<text x="60" y="908">coordination.py</text><text x="200" y="908">sample_locality.py</text><text x="360" y="908">integrity.py</text><text x="520" y="908">promote.py</text><text x="700" y="908">system_benchmark.py</text>
+</g>
+<g font-size="10.5" fill="#7a7a74">
+<text x="60" y="922">adoptions, conflicts</text><text x="200" y="922">permutation, subset</text><text x="360" y="922">evidence binding</text><text x="520" y="922">three LKG channels</text><text x="700" y="922">equal-budget A/B</text>
+</g>
+<text x="60" y="936" font-size="10.5" fill="#7a7a74">plus chicken_timestamp_candidate.py &#8212; a task adapter that freezes all 300 official image hashes and authorises at most one exploratory submission</text>
+
+<!-- LKG -->
+<text x="40" y="982" font-size="12.5" fill="#888882">THREE LAST-KNOWN-GOOD CHANNELS &#8212; because they fail differently, and nothing is ever copied across</text>
+<g font-size="12.5">
+<rect x="40" y="994" width="266" height="76" rx="10" fill="#efeade" stroke="#cfc6ac"/>
+<text x="60" y="1018" font-size="13" fill="#2c2c2a">development</text>
+<text x="60" y="1038" font-size="11.5" fill="#7a7a74">best script-computed OOF used</text>
+<text x="60" y="1054" font-size="11.5" fill="#7a7a74">during the search</text>
+
+<rect x="317" y="994" width="266" height="76" rx="10" fill="#efeade" stroke="#cfc6ac"/>
+<text x="337" y="1018" font-size="13" fill="#2c2c2a">clean</text>
+<text x="337" y="1038" font-size="11.5" fill="#7a7a74">one-shot, hash-bound, and reviewed</text>
+<text x="337" y="1054" font-size="11.5" fill="#7a7a74">by someone who is not the proposer</text>
+
+<rect x="594" y="994" width="266" height="76" rx="10" fill="#efeade" stroke="#cfc6ac"/>
+<text x="614" y="1018" font-size="13" fill="#2c2c2a">public</text>
+<text x="614" y="1038" font-size="11.5" fill="#7a7a74">best Kaggle-scored submission &#8212;</text>
+<text x="614" y="1054" font-size="11.5" fill="#7a7a74">never copied into clean</text>
+</g>
+
+<!-- GATES -->
+<text x="40" y="1106" font-size="12.5" fill="#888882">FOUR SUBMISSION GATES &#8212; and each has a point past which it cannot refuse</text>
+<g font-size="12.5">
+<rect x="40" y="1118" width="196" height="98" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="60" y="1142" font-size="13" fill="#2c2c2a">1 &#183; the ruler exists</text>
+<text x="60" y="1162" font-size="11.5" fill="#7a7a74">and N candidates carry a</text>
+<text x="60" y="1178" font-size="11.5" fill="#7a7a74">script-computed score</text>
+<text x="60" y="1200" font-size="11" fill="#8a7f5f">past 55%: send the best there is</text>
+
+<rect x="248" y="1118" width="196" height="98" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="268" y="1142" font-size="13" fill="#2c2c2a">2 &#183; quota</text>
+<text x="268" y="1162" font-size="11.5" fill="#7a7a74">must beat what was already</text>
+<text x="268" y="1178" font-size="11.5" fill="#7a7a74">sent; half the slots are held</text>
+<text x="268" y="1200" font-size="11" fill="#8a7f5f">for the second half of the window</text>
+
+<rect x="456" y="1118" width="196" height="98" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="476" y="1142" font-size="13" fill="#2c2c2a">3 &#183; mechanical evidence</text>
+<text x="476" y="1162" font-size="11.5" fill="#7a7a74">format, hash provenance,</text>
+<text x="476" y="1178" font-size="11.5" fill="#7a7a74">order dependence</text>
+<text x="476" y="1200" font-size="11" fill="#8a7f5f">only fatal findings block alone</text>
+
+<rect x="664" y="1118" width="196" height="98" rx="10" fill="#f1efe8"/>
+<text x="684" y="1142" font-size="13" fill="#2c2c2a">4 &#183; the evaluator</text>
+<text x="684" y="1162" font-size="11.5" fill="#7a7a74">APPROVE / HOLD / REJECT,</text>
+<text x="684" y="1178" font-size="11.5" fill="#7a7a74">given gate 3 as evidence</text>
+<text x="684" y="1200" font-size="11" fill="#8a7f5f">90s silence falls back to gate 3</text>
+</g>
+<line x1="236" y1="1167" x2="246" y2="1167" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+<line x1="444" y1="1167" x2="454" y2="1167" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+<line x1="652" y1="1167" x2="662" y2="1167" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+
+<!-- MODES -->
+<text x="40" y="1256" font-size="12.5" fill="#888882">THE TWO FROZEN MODES &#8212; chosen at launch, enforced by evidence.py, never negotiable afterwards</text>
+<rect x="40" y="1268" width="404" height="86" rx="10" fill="#efeade" stroke="#cfc6ac"/>
+<text x="60" y="1292" font-size="13" fill="#2c2c2a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">competition</text>
+<text x="60" y="1313" font-size="11.5" fill="#7a7a74">sparse leaderboard calibration, and only after a</text>
+<text x="60" y="1329" font-size="11.5" fill="#7a7a74">submission has been sealed and sent</text>
+<text x="60" y="1347" font-size="11" fill="#888882">a public score may never promote evidence by itself</text>
+
+<rect x="456" y="1268" width="404" height="86" rx="10" fill="#efeade" stroke="#cfc6ac"/>
+<text x="476" y="1292" font-size="13" fill="#2c2c2a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">clean-benchmark</text>
+<text x="476" y="1313" font-size="11.5" fill="#7a7a74">leaderboard and web withheld from every lineage;</text>
+<text x="476" y="1329" font-size="11.5" fill="#7a7a74">an attempted audit read is permanent taint</text>
+<text x="476" y="1347" font-size="11" fill="#888882">a competition workspace is never reusable as clean evidence</text>
+
+<text x="40" y="1386" font-size="11.5" fill="#888882">Results on this branch: radar 0.98358 &#183; chicken 0.92071, below the 0.93156 incumbent, so nothing was promoted.  python -m native.selftest &#8212; 163 checks.</text>
+</svg>
