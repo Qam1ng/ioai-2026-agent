@@ -1663,8 +1663,8 @@ def bootstrap(ws: Path, args, budget: Budget, trace: Tracer) -> None:
     try:
         overview = R.kaggle_overview({}, ctx)
         (ws / "TASK.md").write_text(overview)
-        print(f"[boot] {whoami()}", flush=True)
-    print(f"[boot] task statement -> TASK.md ({len(overview)} chars)", flush=True)
+        print(f"[boot] task statement -> TASK.md ({len(overview)} chars)",
+              flush=True)
         if overview.startswith("!! WARNING"):
             facts.board().post(
                 "data", "The Kaggle description/evaluation pages are Kaggle's "
@@ -1875,6 +1875,8 @@ async def run(args) -> None:
         allowance = min(allowance, args.max_submissions)
     QUOTA.update({"limit": left, "used_today": used, "sent": []})
     src = "kaggle says" if left is not None else "no quota reading — guessing"
+    print(f"[boot] {whoami()}", flush=True)
+    print(f"[boot] model: {args.model}", flush=True)
     print(f"[boot] submissions: {src} {left if left is not None else '?'} left "
           f"today ({used} sent already) -> this run may send {allowance}",
           flush=True)
