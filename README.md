@@ -155,7 +155,7 @@ which records for each decision the failure that produced it.
 | `native/evidence.py` | immutable run contract, clean/competition modes, taint and reveal receipts |
 | `native/scripts/` | recon · folds · evaluate · promote · integrity · coordination · sample locality · system A/B benchmark |
 | `native/monitor.py` | `./watch` — the board first, stuck gates above it |
-| `native/selftest.py` | 163 checks against hand-computed values |
+| `native/selftest.py` | 201 checks against hand-computed values |
 | `skills/validation-split/` | how to cut a split, loaded by the evaluator |
 
 ### Three things it does differently
@@ -187,7 +187,7 @@ cp .env.example .env                              # ANTHROPIC_API_KEY
 mkdir -p ~/.kaggle && printf 'KGAT_...' > ~/.kaggle/access_token
 chmod 600 ~/.kaggle/access_token
 
-python -m native.selftest                         # 163 checks, no API calls
+python -m native.selftest                         # 201 checks, no API calls
 
 export CUDA_VISIBLE_DEVICES=4,5,6,7               # only cards that are yours
 python -m native.main --mode competition --slug <competition> --solvers 3 \

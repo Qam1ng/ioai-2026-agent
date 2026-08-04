@@ -220,12 +220,38 @@ Scarce-anchor behaviour is still recorded — six stress scenarios across five
 seeds, where crops *do* help by up to +0.021 — but it is diagnostics. Selection
 reads the calibrated ruler and nothing else.
 
+**The calibration transfers; the fix does not.** `ruler_calibration.py` is the
+task-agnostic half — two feature matrices in, a verdict on the holdout out, no
+label touched. Pointed at radar's own kNN fingerprint space, with radar's
+actual fold assignment measured verbatim rather than reconstructed:
+
+    live test -> train      median nearest-neighbour distance   1.8961
+    as used (contiguous five-fold)                    1.9140   gap 0.94%
+    shuffled five-fold                                1.9156   gap 1.03%
+    leave-one-out                                     1.8934   gap 0.15%
+
+Radar's ruler is right, to within a percent, and the same holds in the
+standardised space (0.45%). Its contiguous split is worth a second look — five
+blocks of 200 in file-id order is a group holdout whenever the ordering means
+something — but here it measures identically to a shuffled one, so the ordering
+carries nothing. Chicken's grouped five-fold missed by 18.8% on the same
+measurement. Radar has 1000 labelled samples where chicken has 100, and
+withholding a fifth of a thousand barely moves the nearest neighbour.
+
+So the audit came back clean and no radar margin is restated. That is worth one
+run to know: it means the +0.0002 topology gain there is not the chicken defect
+wearing a different hat.
+
     python -m native.scripts.chicken_data_synthesis prepare  --run-root <r> --source-root <s> --timestamps <t>
     python -m native.scripts.chicken_data_synthesis synthesize --run-root <r> --source-root <s>
     python -m native.scripts.chicken_data_synthesis validate --run-root <r>
     python -m native.scripts.chicken_data_synthesis seal     --run-root <r>   # fails closed when nothing clears
     python -m native.scripts.chicken_data_synthesis audit    --run-root <r>
     python -m native.scripts.chicken_data_synthesis record   --run-root <r> --submission-ref <id> --public-score <s>
+
+    python -m native.scripts.ruler_calibration \
+        --train-features x_train.npz --test-features x_test.npz \
+        --folds folds_as_used.npy --in-use as_used [--raw] [--out report.json]
 
 ## Supervision
 
@@ -258,7 +284,7 @@ refusing is more likely wrong than the run is.
 
 ## Tests
 
-    python -m native.selftest     # 163 checks
+    python -m native.selftest     # 201 checks
 
 Against hand-computed values, not against themselves. If `evaluate.py` is wrong
 every downstream decision is wrong and nothing else in the system can notice.

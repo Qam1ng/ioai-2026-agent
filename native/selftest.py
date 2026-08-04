@@ -904,6 +904,76 @@ def test_chicken_data_synthesis() -> None:
     )
 
 
+def test_ruler_calibration() -> None:
+    print("\n[ruler calibration]")
+    import numpy as np
+
+    from native.scripts import ruler_calibration as cal
+
+    # Nearest-neighbour distance, worked out by hand on a 3-4-5 triangle.
+    query = np.asarray([[0.0, 0.0]])
+    reference = np.asarray([[3.0, 4.0], [10.0, 0.0]])
+    check("nearest distance is the 3-4-5 hypotenuse", cal.nearest_distances(query, reference).tolist(), [5.0])
+    check(
+        "blocking does not change the answer",
+        cal.nearest_distances(np.zeros((5, 2)), reference, block=2).tolist(),
+        [5.0] * 5,
+    )
+
+    groups = np.repeat(np.arange(10), 10)
+    for ruler in ("leave_one_out", "kfold_5", "contiguous_5fold", "interleaved_10pct"):
+        parts = cal.holdouts(ruler, 20260803, 100, groups)
+        covered = sorted(int(i) for part in parts for i in part)
+        check(
+            f"{ruler} partitions every row exactly once",
+            (len(covered), covered == list(range(100))),
+            (100, True),
+        )
+    check(
+        "contiguous five-fold holds out five blocks of twenty",
+        [len(part) for part in cal.holdouts("contiguous_5fold", 20260803, 100, groups)],
+        [20] * 5,
+    )
+    check(
+        "contiguous five-fold keeps rows in arrival order",
+        cal.holdouts("contiguous_5fold", 20260803, 100, groups)[0].tolist() == list(range(20)),
+        True,
+    )
+    check(
+        "shuffled five-fold does not",
+        cal.holdouts("kfold_5", 20260803, 100, groups)[0].tolist() == list(range(20)),
+        False,
+    )
+    check(
+        "grouped five-fold never splits a group",
+        max(
+            len({int(groups[i]) for i in part} & {int(groups[j]) for j in other})
+            for index, part in enumerate(cal.holdouts("grouped_5fold", 20260803, 100, groups))
+            for other in cal.holdouts("grouped_5fold", 20260803, 100, groups)[index + 1 :]
+        ),
+        0,
+    )
+    check(
+        "a ruler needing groups fails closed without them",
+        type(_capture(lambda: cal.holdouts("grouped_5fold", 1, 100, None))).__name__,
+        "ValueError",
+    )
+    check(
+        "an unknown ruler fails closed",
+        type(_capture(lambda: cal.holdouts("vibes", 1, 100, groups))).__name__,
+        "ValueError",
+    )
+    check("warning threshold is 5%", cal.GAP_WARNING_RATIO, 0.05)
+
+
+def _capture(call):
+    try:
+        call()
+    except Exception as exc:  # noqa: BLE001 - the test wants the exception object
+        return exc
+    return None
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         ws = Path(td)
@@ -917,6 +987,7 @@ def main() -> int:
         test_evidence_firewall_and_coordination(ws)
         test_chicken_timestamp_candidate()
         test_chicken_data_synthesis()
+        test_ruler_calibration()
     test_configs()
     test_submit_gate()
     test_solver_cannot_submit()

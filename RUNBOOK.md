@@ -84,7 +84,7 @@ commands, but the launcher's own variable is what defines "ours".
 
 ## Checks
 
-    python -m native.selftest                          # 188, hand-computed
+    python -m native.selftest                          # 201, hand-computed
     python -m native.monitor --slug <slug> --json
     python -m native.scripts.checkfolds --workspace <ws>
     python -m native.scripts.integrity --candidate <s> --workspace <ws>
