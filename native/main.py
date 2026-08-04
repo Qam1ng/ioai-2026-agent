@@ -2082,6 +2082,29 @@ def whoami() -> str:
     return f"auth: {who}{shadow}"
 
 
+def pid_alive(pid: int) -> bool:
+    """Is that process still running?
+
+    Every other `/proc` reader here checks the directory exists and skips the
+    Linux-only work when it does not. This one could not skip: a missing
+    `/proc` read as "not running", so on macOS the lock below cleared itself as
+    stale however live its owner was, and the guard was off on a runtime
+    `evidence.py` calls supported. Signal 0 is the POSIX way to ask and it
+    answers on both.
+    """
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # it is there; it is just not ours to signal
+    except OSError:
+        return False
+    return True
+
+
 def claim_slug(ws: Path, slug: str) -> None:
     """One run per competition, enforced rather than remembered.
 
@@ -2097,8 +2120,7 @@ def claim_slug(ws: Path, slug: str) -> None:
             pid = int(lock.read_text().split()[0])
         except Exception:  # noqa: BLE001
             pid = -1
-        alive = Path(f"/proc/{pid}").exists() if pid > 0 else False
-        if alive:
+        if pid_alive(pid):
             raise SystemExit(
                 f"!! a run on {slug} is already live as pid {pid}, sharing this "
                 f"workspace.\n!! Stop it first (./killswitch.sh 0), or use a "
