@@ -8,7 +8,11 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .evaluation import evaluate_candidate, validate_submission_csv
+from .evaluation import (
+    evaluate_candidate,
+    validate_kernel_package,
+    validate_submission_csv,
+)
 from .io import atomic_json, locked, read_json, tree_hash
 
 SOURCE_LANES = ("hearsay", "codex", "claude")
@@ -111,6 +115,14 @@ class CandidateRegistry:
         accelerator = str(manifest.get("accelerator", "cpu")).lower()
         if accelerator not in {"cpu", "p100", "t4"}:
             raise ValueError("accelerator must be cpu, p100, or t4")
+        estimated_kernel_minutes = manifest.get("estimated_kernel_minutes")
+        if estimated_kernel_minutes is not None:
+            try:
+                estimated_kernel_minutes = float(estimated_kernel_minutes)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("estimated_kernel_minutes must be numeric") from exc
+            if not 0 < estimated_kernel_minutes <= 360:
+                raise ValueError("estimated_kernel_minutes must be in (0, 360]")
 
         before = candidate_fingerprint(source)
         canonical_id = f"{source_lane}-{raw_id}-{before[:10]}"
@@ -136,17 +148,32 @@ class CandidateRegistry:
             format_result = validate_submission_csv(
                 self.assets, snapshot / "out" / "submission.csv"
             )
+            kernel_result = (
+                validate_kernel_package(snapshot)
+                if mode in {"kernel", "unknown"}
+                else {"valid": True, "errors": [], "source": "", "metadata": {}}
+            )
             evaluation_result: dict[str, Any] = {"status": "pending_contract"}
             if (self.evaluation / "contract.json").is_file():
                 evaluation_result = evaluate_candidate(self.evaluation, snapshot)
             duplicate_of = None
             submission_hash = format_result.get("submission_sha256")
+            kernel_source = Path(str(kernel_result.get("source", "")))
+            execution_hash = (
+                tree_hash(kernel_source) if mode in {"kernel", "unknown"}
+                and kernel_source.is_dir() else submission_hash
+            )
             for candidate in index["candidates"].values():
-                if submission_hash and candidate.get("submission_sha256") == submission_hash:
+                if execution_hash and candidate.get("execution_sha256") == execution_hash:
                     duplicate_of = candidate["candidate_id"]
                     break
-            status = "duplicate" if duplicate_of else (
-                "eligible" if format_result.get("valid") else "invalid_format"
+            valid_artifact = bool(
+                format_result.get("valid") and kernel_result.get("valid")
+            )
+            status = (
+                "invalid_format" if not valid_artifact
+                else "duplicate" if duplicate_of
+                else "eligible"
             )
             record = {
                 "schema_version": 1,
@@ -158,11 +185,17 @@ class CandidateRegistry:
                 "snapshot_path": str(snapshot),
                 "submission_mode": mode,
                 "accelerator": accelerator,
+                "estimated_kernel_minutes": estimated_kernel_minutes,
                 "purpose": str(manifest.get("purpose", ""))[:500],
                 "parent_id": str(manifest.get("parent_id", ""))[:100],
                 "claimed_local_score": manifest.get("claimed_local_score"),
                 "submission_sha256": submission_hash,
+                "execution_sha256": execution_hash,
                 "format": format_result,
+                "kernel_format": {
+                    key: value for key, value in kernel_result.items()
+                    if key != "metadata"
+                },
                 "evaluation": evaluation_result,
                 "status": status,
                 "duplicate_of": duplicate_of,

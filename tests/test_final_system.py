@@ -4,6 +4,8 @@ import asyncio
 import copy
 import hashlib
 import json
+import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -12,16 +14,24 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from final_system.broker import SubmissionBroker
 from final_system.calibration import FeedbackCalibrator
 from final_system.config import SystemConfig
 from final_system.controller import FinalController
-from final_system.evaluation import freeze_contract, verify_contract
+from final_system.day_gate import DayResourceGate
+from final_system.evaluation import (
+    freeze_contract,
+    validate_kernel_package,
+    validate_submission_csv,
+    verify_contract,
+)
 from final_system.io import atomic_json, canonical, read_json
 from final_system.kaggle import DryRunAdapter, KaggleAdapter, SubmitResult
 from final_system.registry import CandidateRegistry
 from final_system.runners import ClaudeSubscriptionRunner, OpenRouterCodexRunner
+from final_system.security import build_agent_sandbox, verify_agent_sandbox
 from final_system.selection import SelectionManager
 from native import main as native_main
 from native import tools as native_tools
@@ -54,6 +64,28 @@ def make_evaluation(root: Path) -> Path:
             "fold": [0, 0, 1, 1],
             "labels": [0.0, 1.0, 0.0, 1.0],
             "scheme": "kfold",
+        }),
+        encoding="utf-8",
+    )
+    (source / "metric_tests.json").write_text(
+        json.dumps({
+            "cases": [{
+                "y_true": [0.0, 1.0],
+                "y_pred": [0.0, 1.0],
+                "expected": 0.0,
+                "tolerance": 1e-8,
+            }],
+        }),
+        encoding="utf-8",
+    )
+    (source / "contract_evidence.json").write_text(
+        json.dumps({
+            "metric_name": "negative_mse",
+            "direction": "maximize",
+            "metric_source": "assets/competition_description.md",
+            "id_source": "assets/train.csv:id",
+            "label_source": "assets/train.csv:target",
+            "split_rationale": "deterministic two-fold unit test",
         }),
         encoding="utf-8",
     )
@@ -100,6 +132,25 @@ def test_config_is_formal_duration_agnostic() -> None:
     assert config.codex.model == "openai/gpt-5.6-sol"
     assert config.selection.model == "claude-fable-5"
     assert config.selection.effort == "high"
+    assert config.run.metric_direction == "auto"
+    assert config.resources.gpu_quota_hours == 30
+    assert config.resources.gpu_concurrency == 2
+    assert config.resources.cpu_concurrency == 5
+
+
+def test_formal_live_controller_requires_shared_pool_and_floor_group(
+    tmp_path: Path,
+) -> None:
+    config = SystemConfig.load(
+        ROOT / "configs/final_agent_system.toml", repo_root=ROOT
+    )
+    with pytest.raises(ValueError, match="floor-group-id"):
+        FinalController(
+            config=config, slug="task-a", assets_dir=tmp_path,
+            duration_minutes=360, competition_mode="formal",
+            kaggle_user="user", live=True, resource_pool_id="event",
+            day_slugs=("task-a", "task-b", "task-c"),
+        )
 
 
 def test_evaluation_contract_is_frozen_and_hash_bound(tmp_path: Path) -> None:
@@ -130,10 +181,123 @@ def test_evaluation_contract_can_replace_controller_precreated_empty_mount(
         }),
         encoding="utf-8",
     )
+    (source / "metric_tests.json").write_text(
+        json.dumps({
+            "cases": [{
+                "y_true": [0, 1], "y_pred": [1, 0], "expected": 0.0,
+            }],
+        }),
+        encoding="utf-8",
+    )
+    (source / "contract_evidence.json").write_text(
+        json.dumps({
+            "metric_name": "constant_test_metric",
+            "direction": "maximize",
+            "metric_source": "assets/overview.txt",
+            "id_source": "assets/train.csv:id",
+            "label_source": "assets/train.csv:label",
+            "split_rationale": "one deterministic unit per fold",
+        }),
+        encoding="utf-8",
+    )
     target = tmp_path / "evaluation"
     target.mkdir()
     contract = freeze_contract(source, target, direction="maximize")
     assert verify_contract(target) == contract
+
+
+def test_evaluation_contract_rejects_a_metric_that_fails_its_known_answer(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "evaluator"
+    source.mkdir()
+    (source / "metric.py").write_text(
+        "def score(y_true, y_pred): return 0.0\n", encoding="utf-8"
+    )
+    (source / "folds.json").write_text(json.dumps({
+        "ids": ["a", "b"], "fold": [0, 1], "labels": [0, 1],
+        "scheme": "kfold",
+    }), encoding="utf-8")
+    (source / "metric_tests.json").write_text(json.dumps({
+        "cases": [{"y_true": [0], "y_pred": [1], "expected": 1.0}],
+    }), encoding="utf-8")
+    (source / "contract_evidence.json").write_text(json.dumps({
+        "metric_name": "broken",
+        "direction": "maximize",
+        "metric_source": "assets/overview.txt",
+        "id_source": "assets/train.csv:id",
+        "label_source": "assets/train.csv:label",
+        "split_rationale": "deterministic unit test",
+    }), encoding="utf-8")
+    with pytest.raises(ValueError, match="metric test case 0 failed"):
+        freeze_contract(source, tmp_path / "evaluation", direction="maximize")
+
+
+def test_evaluation_contract_resolves_metric_direction_from_evidence(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "evaluator"
+    source.mkdir()
+    (source / "metric.py").write_text(
+        "def score(y_true, y_pred): return float((y_true[0]-y_pred[0])**2)\n",
+        encoding="utf-8",
+    )
+    (source / "folds.json").write_text(json.dumps({
+        "ids": ["a", "b"], "fold": [0, 1], "labels": [0, 1],
+        "scheme": "kfold",
+    }), encoding="utf-8")
+    (source / "metric_tests.json").write_text(json.dumps({
+        "cases": [{"y_true": [0], "y_pred": [1], "expected": 1.0}],
+    }), encoding="utf-8")
+    (source / "contract_evidence.json").write_text(json.dumps({
+        "metric_name": "mse", "direction": "minimize",
+        "metric_source": "assets/overview.txt",
+        "id_source": "assets/train.csv:id",
+        "label_source": "assets/train.csv:label",
+        "split_rationale": "deterministic two-fold test",
+    }), encoding="utf-8")
+    contract = freeze_contract(
+        source, tmp_path / "evaluation", direction="auto"
+    )
+    assert contract["direction"] == "minimize"
+
+
+def test_submission_csv_uses_official_submission_csv_as_template(
+    tmp_path: Path,
+) -> None:
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "submission.csv").write_text(
+        "id,pred\na,0\nb,0\nc,0\n", encoding="utf-8"
+    )
+    candidate = tmp_path / "garbage.csv"
+    candidate.write_text("id,pred\nfake,1\n", encoding="utf-8")
+    result = validate_submission_csv(assets, candidate)
+    assert result["valid"] is False
+    assert result["sample_submission"].endswith("submission.csv")
+    assert any("row count mismatch" in error for error in result["errors"])
+    candidate.write_text(
+        "id,pred\na,0.1\nb,nan\nc,0.3\n", encoding="utf-8"
+    )
+    result = validate_submission_csv(assets, candidate)
+    assert result["valid"] is False
+    assert any("non-finite" in error for error in result["errors"])
+
+
+def test_kernel_package_rejects_helpers_that_kaggle_would_not_upload(
+    tmp_path: Path,
+) -> None:
+    kernel = tmp_path / "candidate" / "out" / "kernel"
+    kernel.mkdir(parents=True)
+    (kernel / "main.py").write_text("import helper\n", encoding="utf-8")
+    (kernel / "helper.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (kernel / "kernel-metadata.json").write_text(json.dumps({
+        "code_file": "main.py", "kernel_type": "script", "language": "python",
+        "dataset_sources": [], "kernel_sources": [], "model_sources": [],
+    }), encoding="utf-8")
+    result = validate_kernel_package(tmp_path / "candidate")
+    assert result["valid"] is False
+    assert any("standalone" in error for error in result["errors"])
 
 
 def test_registry_recomputes_score_and_rejects_duplicate_prediction_file(
@@ -549,10 +713,128 @@ def test_live_adapter_reads_structured_remaining_quota(
             returncode=0,
         ),
     )
+    assets = make_assets(tmp_path)
+    gate = DayResourceGate(
+        tmp_path / "resource", pool_id="event", floor_group_id="day-1",
+        expected_slugs=("slug",),
+        gpu_limit_hours=30, gpu_concurrency=2, cpu_concurrency=5,
+    )
     adapter = KaggleAdapter(
-        slug="slug", root=tmp_path, kaggle_user="user", submission_mode="auto"
+        slug="slug", root=tmp_path, kaggle_user="user", submission_mode="auto",
+        assets=assets, resource_gate=gate,
+        competition_deadline_epoch=time.time() + 3600,
     )
     assert adapter.remaining_today() == 43
+
+
+def test_kernel_adapter_validates_downloaded_output_before_submission(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    assets = make_assets(tmp_path)
+    candidate = tmp_path / "candidate"
+    kernel = candidate / "out" / "kernel"
+    kernel.mkdir(parents=True)
+    (kernel / "solution.py").write_text("print('run')\n", encoding="utf-8")
+    source_metadata = {
+        "code_file": "solution.py", "kernel_type": "script", "language": "python",
+        "dataset_sources": ["owner/dataset"],
+        "kernel_sources": ["owner/kernel"],
+        "model_sources": ["owner/model/framework/model/1"],
+    }
+    (kernel / "kernel-metadata.json").write_text(
+        json.dumps(source_metadata), encoding="utf-8"
+    )
+    gate = DayResourceGate(
+        tmp_path / "resource", pool_id="event", floor_group_id="day-1",
+        expected_slugs=("slug",),
+        gpu_limit_hours=30, gpu_concurrency=2, cpu_concurrency=5,
+        poll_seconds=0.01,
+    )
+    adapter = KaggleAdapter(
+        slug="slug", root=tmp_path / "control", kaggle_user="user",
+        submission_mode="kernel", assets=assets, resource_gate=gate,
+        competition_deadline_epoch=time.time() + 3600,
+        default_cpu_kernel_minutes=1,
+    )
+    monkeypatch.setattr("final_system.kaggle.push_kernel", lambda _path: (True, 7, "ok"))
+    monkeypatch.setattr(
+        "final_system.kaggle.poll_kernel", lambda _ref, timeout_s: ("complete", "ok")
+    )
+    from kaggle.api.kaggle_api_extended import KaggleApi
+
+    monkeypatch.setattr(KaggleApi, "authenticate", lambda self: None)
+    submit_calls: list[dict] = []
+
+    def fake_output(self, kernel_ref, path, **kwargs):
+        del self, kernel_ref, kwargs
+        Path(path, "submission.csv").write_text(
+            "id,pred\nwrong,1\n", encoding="utf-8"
+        )
+
+    def fake_submit(self, *args, **kwargs):
+        del self, args
+        submit_calls.append(kwargs)
+
+    monkeypatch.setattr(KaggleApi, "kernels_output", fake_output)
+    monkeypatch.setattr(KaggleApi, "competition_submit_code", fake_submit)
+    result = adapter.submit(
+        {
+            "candidate_id": "candidate", "source_lane": "codex",
+            "snapshot_path": str(candidate), "submission_mode": "kernel",
+            "accelerator": "cpu", "estimated_kernel_minutes": 0.1,
+        },
+        "sub-1", "floor",
+    )
+    assert result.status == "execution_error"
+    assert result.consumed is False
+    assert submit_calls == []
+    assert gate.status()["cpu_inflight"] == 0
+    pushed = json.loads(
+        (tmp_path / "control" / "kernels" / "sub-1" / "kernel-metadata.json")
+        .read_text(encoding="utf-8")
+    )
+    assert pushed["dataset_sources"] == source_metadata["dataset_sources"]
+    assert pushed["kernel_sources"] == source_metadata["kernel_sources"]
+    assert pushed["model_sources"] == source_metadata["model_sources"]
+
+
+def test_kernel_adapter_refuses_to_start_after_its_runtime_deadline(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    assets = make_assets(tmp_path)
+    candidate = tmp_path / "candidate"
+    kernel = candidate / "out" / "kernel"
+    kernel.mkdir(parents=True)
+    (kernel / "solution.py").write_text("print('run')\n", encoding="utf-8")
+    (kernel / "kernel-metadata.json").write_text(json.dumps({
+        "code_file": "solution.py", "kernel_type": "script", "language": "python",
+        "dataset_sources": [], "kernel_sources": [], "model_sources": [],
+    }), encoding="utf-8")
+    gate = DayResourceGate(
+        tmp_path / "resource", pool_id="event", floor_group_id="day-1",
+        expected_slugs=("slug",),
+        gpu_limit_hours=30, gpu_concurrency=2, cpu_concurrency=5,
+    )
+    adapter = KaggleAdapter(
+        slug="slug", root=tmp_path / "control", kaggle_user="user",
+        submission_mode="kernel", assets=assets, resource_gate=gate,
+        competition_deadline_epoch=time.time() + 30,
+        default_cpu_kernel_minutes=1, kernel_start_margin_minutes=1,
+    )
+    monkeypatch.setattr(
+        "final_system.kaggle.push_kernel",
+        lambda _path: pytest.fail("late kernel must not be pushed"),
+    )
+    result = adapter.submit(
+        {
+            "candidate_id": "candidate", "source_lane": "codex",
+            "snapshot_path": str(candidate), "submission_mode": "kernel",
+            "accelerator": "cpu", "estimated_kernel_minutes": 0.1,
+        },
+        "sub-late", "floor",
+    )
+    assert result.status == "deadline_blocked"
+    assert gate.status()["cpu_inflight"] == 0
 
 
 def test_concurrent_broker_reservation_never_exceeds_quota(tmp_path: Path) -> None:
@@ -616,12 +898,27 @@ def test_ambiguous_external_result_holds_slot_until_reconciled(tmp_path: Path) -
     )
 
     class AmbiguousAdapter(DryRunAdapter):
+        def __init__(self):
+            super().__init__("slug", tmp_path)
+            self.submission_id = ""
+            self.reconciled: list[str] = []
+
         def submit(self, record, submission_id, submission_class):
+            self.submission_id = submission_id
             return SubmitResult(False, "ambiguous", "connection closed")
 
+        def submission_states(self):
+            return {
+                self.submission_id: {"exists": True, "public_score": None}
+            }
+
+        def on_reconciled_submission(self, row):
+            self.reconciled.append(row["submission_id"])
+
+    adapter = AmbiguousAdapter()
     broker = SubmissionBroker(
         tmp_path / "control", registry=registry,
-        adapter=AmbiguousAdapter("slug", tmp_path), max_submissions=2,
+        adapter=adapter, max_submissions=2,
         final_reserve=0, initial_calibrations=1, final_start_fraction=0.8,
         anti_monopoly_fraction=0.5, min_local_gain=0.0,
         direction="maximize",
@@ -629,6 +926,260 @@ def test_ambiguous_external_result_holds_slot_until_reconciled(tmp_path: Path) -
     assert broker.tick(fraction_elapsed=0.1) is not None
     assert broker.remaining() == 2
     assert broker.reservable() == 1
+    assert broker.refresh_scores() == 1
+    assert broker.remaining() == 1
+    assert adapter.reconciled == [adapter.submission_id]
+
+
+def test_known_non_consuming_failure_retries_without_spending_extra_slot(
+    tmp_path: Path,
+) -> None:
+    assets = make_assets(tmp_path)
+    evaluation = make_evaluation(tmp_path)
+    registry = CandidateRegistry(
+        tmp_path / "registry", assets=assets, evaluation=evaluation
+    )
+    registry.register(
+        make_candidate(
+            tmp_path, lane="codex", candidate_id="retry-me",
+            predictions=[0, 1, 0, 1], csv_values=("0.1", "0.2"),
+        ),
+        source_lane="codex",
+    )
+
+    class FlakyAdapter(DryRunAdapter):
+        def __init__(self) -> None:
+            super().__init__("slug", tmp_path)
+            self.calls = 0
+
+        def submit(self, record, submission_id, submission_class):
+            self.calls += 1
+            if self.calls == 1:
+                # 旧 Adapter 使用 error；Broker 必须安全归一为有限重试。
+                return SubmitResult(False, "error", "temporary 503")
+            return super().submit(record, submission_id, submission_class)
+
+    adapter = FlakyAdapter()
+    broker = SubmissionBroker(
+        tmp_path / "control", registry=registry, adapter=adapter,
+        max_submissions=3, final_reserve=0, initial_calibrations=1,
+        final_start_fraction=0.8, anti_monopoly_fraction=0.5,
+        min_local_gain=0.0, direction="maximize",
+        max_retryable_attempts=3, retry_backoff_seconds=0,
+    )
+    first = broker.tick(fraction_elapsed=0.1)
+    second = broker.tick(fraction_elapsed=0.1)
+    assert first and first["result"]["status"] == "retryable"
+    assert first["result"]["consumed"] is False
+    assert second and second["result"]["consumed"] is True
+    assert adapter.calls == 2
+    assert len(broker.consumed()) == 1
+    assert broker.remaining() == 2
+
+
+def test_external_kernel_is_reconciled_instead_of_holding_slot_forever(
+    tmp_path: Path,
+) -> None:
+    assets = make_assets(tmp_path)
+    evaluation = make_evaluation(tmp_path)
+    registry = CandidateRegistry(
+        tmp_path / "registry", assets=assets, evaluation=evaluation
+    )
+    registry.register(
+        make_candidate(
+            tmp_path, lane="codex", candidate_id="remote",
+            predictions=[0, 1, 0, 1], csv_values=("0.1", "0.2"),
+        ),
+        source_lane="codex",
+    )
+
+    class ReconcileAdapter(DryRunAdapter):
+        def submit(self, record, submission_id, submission_class):
+            return SubmitResult(
+                False, "external_running", "poll timed out",
+                kernel_ref="user/kernel", kernel_version=3,
+                resource_lease_id="lease-1",
+            )
+
+        def reconcile_external(self, record, row):
+            return SubmitResult(
+                True, "submitted", "resumed exact version",
+                external_ref="submission-ref", kernel_ref="user/kernel",
+                kernel_version=3,
+            )
+
+        def submission_states(self):
+            return {}
+
+    broker = SubmissionBroker(
+        tmp_path / "control", registry=registry,
+        adapter=ReconcileAdapter("slug", tmp_path), max_submissions=2,
+        final_reserve=0, initial_calibrations=1, final_start_fraction=0.8,
+        anti_monopoly_fraction=0.5, min_local_gain=0.0,
+        direction="maximize",
+    )
+    pending = broker.tick(fraction_elapsed=0.1)
+    assert pending and pending["result"]["status"] == "external_running"
+    assert broker.reservable() == 1
+    assert broker.refresh_scores() == 1
+    assert broker.consumed()[0]["result"]["status"] == "submitted"
+    assert broker.remaining() == 1
+
+
+def test_day_resource_gate_is_shared_across_three_controllers(
+    tmp_path: Path,
+) -> None:
+    kwargs = {
+        "pool_id": "event",
+        "floor_group_id": "day-1",
+        "expected_slugs": ("task-a", "task-b", "task-c"),
+        "gpu_limit_hours": 30,
+        "gpu_concurrency": 2,
+        "cpu_concurrency": 5,
+        "poll_seconds": 0.01,
+    }
+    gate_a = DayResourceGate(tmp_path / "pool", **kwargs)
+    gate_b = DayResourceGate(tmp_path / "pool", **kwargs)
+    blocked, reason = gate_a.acquire(
+        submission_id="too-early", slug="task-a", submission_class="milestone",
+        accelerator="p100", estimated_seconds=60,
+        deadline_epoch=time.time() + 0.04,
+    )
+    assert blocked is None
+    assert "floor" in reason
+    for slug in kwargs["expected_slugs"]:
+        gate_a.mark_floor(slug)
+    first, _ = gate_a.acquire(
+        submission_id="one", slug="task-a", submission_class="milestone",
+        accelerator="p100", estimated_seconds=60,
+        deadline_epoch=time.time() + 1,
+    )
+    second, _ = gate_b.acquire(
+        submission_id="two", slug="task-b", submission_class="milestone",
+        accelerator="t4", estimated_seconds=60,
+        deadline_epoch=time.time() + 1,
+    )
+    third, third_reason = gate_a.acquire(
+        submission_id="three", slug="task-c", submission_class="milestone",
+        accelerator="p100", estimated_seconds=60,
+        deadline_epoch=time.time() + 0.04,
+    )
+    assert first and second
+    assert third is None
+    assert "concurrency" in third_reason
+    assert gate_b.status()["gpu_inflight"] == 2
+    gate_a.settle(first["lease_id"], 30)
+    third, _ = gate_b.acquire(
+        submission_id="three-retry", slug="task-c", submission_class="milestone",
+        accelerator="p100", estimated_seconds=60,
+        deadline_epoch=time.time() + 1,
+    )
+    assert third is not None
+    gate_b.settle(second["lease_id"], 20)
+    gate_b.settle(third["lease_id"], 10)
+    assert gate_a.status()["gpu_hours_used"] == pytest.approx(60 / 3600, abs=1e-4)
+
+
+def test_account_resource_pool_carries_gpu_usage_into_second_day(
+    tmp_path: Path,
+) -> None:
+    common = {
+        "pool_id": "event-account-1", "gpu_limit_hours": 30,
+        "gpu_concurrency": 2, "cpu_concurrency": 5, "poll_seconds": 0.01,
+    }
+    day1 = DayResourceGate(
+        tmp_path / "pool", floor_group_id="day1",
+        expected_slugs=("a", "b", "c"), **common,
+    )
+    lease, _ = day1.acquire(
+        submission_id="floor-a", slug="a", submission_class="floor",
+        accelerator="p100", estimated_seconds=3600,
+        deadline_epoch=time.time() + 1,
+    )
+    assert lease
+    day1.settle(lease["lease_id"], 3600)
+    day2 = DayResourceGate(
+        tmp_path / "pool", floor_group_id="day2",
+        expected_slugs=("d", "e", "f"), **common,
+    )
+    status = day2.status()
+    assert status["gpu_hours_used"] == 1.0
+    assert status["floors"] == {"d": False, "e": False, "f": False}
+    assert set(status["floor_groups"]) == {"day1", "day2"}
+    orphan, _ = day2.acquire(
+        submission_id="orphan", slug="d", submission_class="floor",
+        accelerator="p100", estimated_seconds=60,
+        deadline_epoch=time.time() + 1,
+    )
+    assert orphan
+    day2.mark_running(orphan["lease_id"], "user/orphan-kernel")
+    state = read_json(day2.state_path)
+    state["leases"][orphan["lease_id"]]["pid"] = 999_999_999
+    atomic_json(day2.state_path, state)
+    unknown = day2.external_unknown_leases()
+    assert [item["external_ref"] for item in unknown] == ["user/orphan-kernel"]
+    day2.release(orphan["lease_id"])
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="macOS Seatbelt regression")
+def test_agent_sandbox_blocks_credentials_but_starts_native_agent_clis(
+    tmp_path: Path,
+) -> None:
+    probe = tmp_path / "operator-secret"
+    session = tmp_path / "session"
+    lane = session / "lane"
+    control = session / "control"
+    official_assets = lane / "OFFICIAL_ASSETS"
+    for path in (lane, control, official_assets):
+        path.mkdir(parents=True, exist_ok=True)
+    (control / "broker_state.json").write_text("secret control\n", encoding="utf-8")
+    (official_assets / "task.txt").write_text("official\n", encoding="utf-8")
+    sandbox = build_agent_sandbox(
+        probe_secret=probe,
+        protected_write_roots=(session,),
+        writable_roots=(lane,),
+        read_only_roots=(official_assets,),
+        protected_read_roots=(session,),
+        readable_roots=(lane, official_assets),
+    )
+    verify_agent_sandbox(sandbox, probe_secret=probe)
+    for path, allowed in (
+        (lane / "candidate.txt", True),
+        (control / "tamper.json", False),
+        (official_assets / "tamper.txt", False),
+    ):
+        result = subprocess.run(
+            sandbox.wrap([
+                "/bin/sh", "-c", "/bin/echo test > \"$1\"", "sh", str(path),
+            ]),
+            capture_output=True, text=True, timeout=10,
+        )
+        assert path.exists() is allowed
+        assert (result.returncode == 0) is allowed
+    readable = subprocess.run(
+        sandbox.wrap(["/bin/cat", str(official_assets / "task.txt")]),
+        capture_output=True, text=True, timeout=10,
+    )
+    hidden = subprocess.run(
+        sandbox.wrap(["/bin/cat", str(control / "broker_state.json")]),
+        capture_output=True, text=True, timeout=10,
+    )
+    assert readable.returncode == 0 and readable.stdout.strip() == "official"
+    assert hidden.returncode != 0 and hidden.stdout == ""
+    for binary in (Path("/opt/homebrew/bin/claude"), Path("/opt/homebrew/bin/codex")):
+        if binary.is_file():
+            result = subprocess.run(
+                sandbox.wrap([str(binary), "--version"]),
+                capture_output=True, text=True, timeout=30,
+            )
+            assert result.returncode == 0, result.stderr
+    kaggle = Path(sys.executable).parent / "kaggle"
+    if kaggle.is_file():
+        result = subprocess.run(
+            sandbox.wrap([str(kaggle), "--version"]),
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode != 0
 
 
 def test_controller_dry_run_closes_full_wiring_without_model_or_kaggle(
@@ -671,7 +1222,7 @@ def test_controller_dry_run_closes_full_wiring_without_model_or_kaggle(
                 "schema_version": 1,
                 "candidate_id": f"{self.lane}-candidate",
                 "source_lane": self.lane,
-                "submission_mode": "kernel",
+                "submission_mode": "csv",
                 "accelerator": "cpu",
                 "purpose": "controller integration test",
             }), encoding="utf-8")
@@ -721,7 +1272,9 @@ def test_controller_dry_run_closes_full_wiring_without_model_or_kaggle(
         duration_minutes=0.03, competition_mode="practice",
         kaggle_user="", live=False, run_id="integration",
     )
-    monkeypatch.setattr(controller, "_codex_runner", lambda: FakeRunner("codex"))
+    monkeypatch.setattr(
+        controller, "_codex_runner", lambda **_kwargs: FakeRunner("codex")
+    )
 
     def fake_claude_runner(_profile, **kwargs):
         return (

@@ -27,6 +27,18 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--run-id", default="")
     run.add_argument("--kaggle-user", default="")
     run.add_argument(
+        "--resource-pool-id", default="",
+        help="Kaggle-account quota pool id; keep it identical across both days",
+    )
+    run.add_argument(
+        "--floor-group-id", default="",
+        help="three-task simultaneous floor cohort, for example day1 or day2",
+    )
+    run.add_argument(
+        "--day-slugs", default="",
+        help="comma-separated three competition slugs sharing the account",
+    )
+    run.add_argument(
         "--live", action="store_true",
         help="enable real Kaggle submissions; without this flag the Broker is dry-run",
     )
@@ -45,6 +57,7 @@ def doctor(config: SystemConfig, assets: Path) -> int:
         "codex_binary": config.codex.binary.is_file(),
         "search_prompt": config.search.prompt_spec.is_file(),
         "openrouter_key_env": bool(os.environ.get(config.codex.api_key_env)),
+        "agent_os_sandbox": Path("/usr/bin/sandbox-exec").is_file(),
     }
     if checks["claude_binary"]:
         for label, profile in (
@@ -84,6 +97,11 @@ def main() -> int:
         duration_minutes=args.duration_minutes,
         competition_mode=args.competition_mode, kaggle_user=args.kaggle_user,
         live=args.live, run_id=args.run_id,
+        resource_pool_id=args.resource_pool_id,
+        floor_group_id=args.floor_group_id,
+        day_slugs=tuple(
+            item.strip() for item in args.day_slugs.split(",") if item.strip()
+        ),
     )
     session = asyncio.run(controller.run())
     print(session)

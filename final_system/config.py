@@ -28,6 +28,8 @@ class RunConfig:
     max_inflight_submissions: int
     stop_exploration_minutes_before_end: float
     submission_only_minutes_before_end: float
+    max_retryable_attempts: int
+    retry_backoff_seconds: float
 
 
 @dataclass(frozen=True)
@@ -89,6 +91,24 @@ class SelectionConfig:
 
 
 @dataclass(frozen=True)
+class ResourceConfig:
+    root: Path
+    gpu_quota_hours: float
+    gpu_concurrency: int
+    cpu_concurrency: int
+    default_gpu_kernel_minutes: float
+    default_cpu_kernel_minutes: float
+    kernel_start_margin_minutes: float
+    acquire_poll_seconds: float
+
+
+@dataclass(frozen=True)
+class EvaluationConfig:
+    fallback_after_minutes: float
+    fallback_turn_minutes: float
+
+
+@dataclass(frozen=True)
 class SystemConfig:
     run: RunConfig
     search: SearchConfig
@@ -96,6 +116,8 @@ class SystemConfig:
     codex: CodexConfig
     hearsay: HearSayConfig
     selection: SelectionConfig
+    resources: ResourceConfig
+    evaluation: EvaluationConfig
 
     @classmethod
     def load(cls, path: Path, *, repo_root: Path) -> "SystemConfig":
@@ -107,10 +129,17 @@ class SystemConfig:
         codex = _section(raw, "codex")
         hearsay = _section(raw, "hearsay")
         selection = _section(raw, "selection")
+        resources = _section(raw, "resources")
+        evaluation = _section(raw, "evaluation")
 
         workspace = Path(run.get("workspace_root", "workspace/final_system"))
         if not workspace.is_absolute():
             workspace = repo_root / workspace
+        resource_root = Path(
+            resources.get("root", "workspace/final_system/_resource_pools")
+        )
+        if not resource_root.is_absolute():
+            resource_root = repo_root / resource_root
         prompt = Path(search.get("prompt_spec", "search_system/SEARCH_PROMPTS_ZH.md"))
         if not prompt.is_absolute():
             prompt = repo_root / prompt
@@ -132,7 +161,7 @@ class SystemConfig:
                 final_start_fraction=float(run.get("final_start_fraction", 0.80)),
                 anti_monopoly_fraction=float(run.get("anti_monopoly_fraction", 0.50)),
                 min_local_gain=float(run.get("min_local_gain", 0.0)),
-                metric_direction=str(run.get("metric_direction", "maximize")),
+                metric_direction=str(run.get("metric_direction", "auto")),
                 submission_mode=str(run.get("submission_mode", "auto")),
                 max_inflight_submissions=int(
                     run.get("max_inflight_submissions", 2)
@@ -143,6 +172,8 @@ class SystemConfig:
                 submission_only_minutes_before_end=float(
                     run.get("submission_only_minutes_before_end", 20)
                 ),
+                max_retryable_attempts=int(run.get("max_retryable_attempts", 3)),
+                retry_backoff_seconds=float(run.get("retry_backoff_seconds", 60)),
             ),
             search=SearchConfig(
                 enabled=bool(search.get("enabled", True)),
@@ -204,6 +235,30 @@ class SystemConfig:
                     selection.get("calibration_max_blend_weight", 0.50)
                 ),
             ),
+            resources=ResourceConfig(
+                root=resource_root.resolve(),
+                gpu_quota_hours=float(resources.get("gpu_quota_hours", 30)),
+                gpu_concurrency=int(resources.get("gpu_concurrency", 2)),
+                cpu_concurrency=int(resources.get("cpu_concurrency", 5)),
+                default_gpu_kernel_minutes=float(
+                    resources.get("default_gpu_kernel_minutes", 45)
+                ),
+                default_cpu_kernel_minutes=float(
+                    resources.get("default_cpu_kernel_minutes", 10)
+                ),
+                kernel_start_margin_minutes=float(
+                    resources.get("kernel_start_margin_minutes", 5)
+                ),
+                acquire_poll_seconds=float(resources.get("acquire_poll_seconds", 2)),
+            ),
+            evaluation=EvaluationConfig(
+                fallback_after_minutes=float(
+                    evaluation.get("fallback_after_minutes", 90)
+                ),
+                fallback_turn_minutes=float(
+                    evaluation.get("fallback_turn_minutes", 25)
+                ),
+            ),
         )
         value.validate()
         return value
@@ -215,12 +270,16 @@ class SystemConfig:
             raise ValueError("final_reserve must be smaller than max_submissions")
         if self.run.initial_calibrations < 0:
             raise ValueError("initial_calibrations must be non-negative")
-        if self.run.metric_direction not in {"maximize", "minimize"}:
-            raise ValueError("metric_direction must be maximize or minimize")
+        if self.run.metric_direction not in {"auto", "maximize", "minimize"}:
+            raise ValueError("metric_direction must be auto, maximize or minimize")
         if self.run.submission_mode not in {"auto", "csv", "kernel"}:
             raise ValueError("submission_mode must be auto, csv, or kernel")
         if self.run.max_inflight_submissions not in range(1, 3):
             raise ValueError("max_inflight_submissions must be 1 or 2")
+        if self.run.max_retryable_attempts < 1:
+            raise ValueError("max_retryable_attempts must be positive")
+        if self.run.retry_backoff_seconds < 0:
+            raise ValueError("retry_backoff_seconds must be non-negative")
         if not 0 < self.run.final_start_fraction < 1:
             raise ValueError("final_start_fraction must be between 0 and 1")
         if self.run.stop_exploration_minutes_before_end < 0:
@@ -243,3 +302,20 @@ class SystemConfig:
             raise ValueError("calibration rank gain must be in 0..2")
         if not 0 <= self.selection.calibration_max_blend_weight <= 0.5:
             raise ValueError("calibration blend weight must be in 0..0.5")
+        if self.resources.gpu_quota_hours <= 0:
+            raise ValueError("resources.gpu_quota_hours must be positive")
+        if self.resources.gpu_concurrency < 1 or self.resources.cpu_concurrency < 1:
+            raise ValueError("resource concurrency must be positive")
+        if (
+            self.resources.default_gpu_kernel_minutes <= 0
+            or self.resources.default_cpu_kernel_minutes <= 0
+            or self.resources.kernel_start_margin_minutes < 0
+        ):
+            raise ValueError("resource runtime estimates must be positive")
+        if self.resources.acquire_poll_seconds <= 0:
+            raise ValueError("resources.acquire_poll_seconds must be positive")
+        if (
+            self.evaluation.fallback_after_minutes <= 0
+            or self.evaluation.fallback_turn_minutes <= 0
+        ):
+            raise ValueError("evaluation fallback timing must be positive")

@@ -12,6 +12,7 @@ from search_system.ioai_agent_system.models import AgentResult
 from search_system.ioai_agent_system.redaction import redact_text
 
 from .io import atomic_json
+from .security import AgentSandbox
 
 
 def _safe_base_env() -> dict[str, str]:
@@ -62,6 +63,7 @@ class ClaudeSubscriptionRunner(_ProcessRunner):
     def __init__(
         self, *, binary: Path, model: str, effort: str, profile_dir: Path,
         allowed_tools: str = "Bash,Read,Edit,Write,Glob,Grep,WebSearch,WebFetch",
+        sandbox: AgentSandbox | None = None,
     ):
         super().__init__()
         self.binary = Path(binary)
@@ -69,6 +71,7 @@ class ClaudeSubscriptionRunner(_ProcessRunner):
         self.effort = effort
         self.profile_dir = Path(profile_dir)
         self.allowed_tools = allowed_tools
+        self.sandbox = sandbox
 
     def argv(self, *, resume_session_id: str | None, persist_session: bool) -> list[str]:
         command = [
@@ -83,7 +86,7 @@ class ClaudeSubscriptionRunner(_ProcessRunner):
             command.extend(["--resume", resume_session_id])
         elif not persist_session:
             command.append("--no-session-persistence")
-        return command
+        return self.sandbox.wrap(command) if self.sandbox else command
 
     def environment(self, workdir: Path) -> dict[str, str]:
         env = _safe_base_env()
@@ -187,6 +190,7 @@ class OpenRouterCodexRunner(_ProcessRunner):
     def __init__(
         self, *, binary: Path, model: str, effort: str, provider_id: str,
         base_url: str, api_key_env: str, supports_web_search: bool,
+        sandbox: AgentSandbox | None = None,
     ):
         super().__init__()
         self.binary = Path(binary)
@@ -196,6 +200,7 @@ class OpenRouterCodexRunner(_ProcessRunner):
         self.base_url = base_url
         self.api_key_env = api_key_env
         self.supports_web_search = supports_web_search
+        self.sandbox = sandbox
 
     def argv(
         self, *, workdir: Path, last_message: Path,
@@ -235,7 +240,7 @@ class OpenRouterCodexRunner(_ProcessRunner):
             if not persist_session:
                 tail.append("--ephemeral")
             command.extend([*tail, "-"])
-        return command
+        return self.sandbox.wrap(command) if self.sandbox else command
 
     def environment(self, workdir: Path) -> dict[str, str]:
         env = _safe_base_env()

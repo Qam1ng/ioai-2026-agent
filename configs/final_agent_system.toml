@@ -13,19 +13,24 @@ initial_calibrations = 3
 final_start_fraction = 0.80
 anti_monopoly_fraction = 0.50
 min_local_gain = 0.0
-metric_direction = "maximize"
+# auto 从首个通过自测和证据门的 evaluator contract 冻结；不要假设每题都越大越好。
+metric_direction = "auto"
 
 # formal IOAI 默认是 kernel；auto 会先查询 Kaggle，private 查询不到时严格回退 kernel。
 # 是否真实提交只由 CLI 的显式 `--live` 决定，配置文件不能暗中打开写权限。
 submission_mode = "auto"
 
-# Kaggle 同一账号最多并行 2 个 GPU kernel。Broker 的预留锁保证并发不重复/超发。
+# 单题 Broker 最多保留 2 个后台调用；账号级 2 GPU/5 CPU 由 DayResourceGate 再约束。
 max_inflight_submissions = 2
 
 # 6 小时正式赛默认在 T-120min 停止新探索，留给复算、kernel 队列和最终提交。
 # 短 rehearsal 会按 controller 的比例缩短，不会照搬 120 分钟。
 stop_exploration_minutes_before_end = 120
 submission_only_minutes_before_end = 20
+
+# 只对已确认未消费提交次数的瞬时失败重试；永久格式/执行错误不会重跑。
+max_retryable_attempts = 3
+retry_backoff_seconds = 60
 
 [search]
 enabled = true
@@ -81,3 +86,20 @@ calibration_min_feedback = 4
 calibration_ridge_strength = 10.0
 calibration_min_rank_gain = 0.05
 calibration_max_blend_weight = 0.50
+
+[resources]
+# 六道题沿用同一 resource-pool-id；同一天三题另共用 floor-group-id/day-slugs。
+# 每题 50 次 submission 仍分别记账；这里只管账号每周 Kaggle 计算资源。
+root = "workspace/final_system/_resource_pools"
+gpu_quota_hours = 30
+gpu_concurrency = 2
+cpu_concurrency = 5
+default_gpu_kernel_minutes = 45
+default_cpu_kernel_minutes = 10
+kernel_start_margin_minutes = 5
+acquire_poll_seconds = 2
+
+[evaluation]
+# HearSay evaluator 到此时仍未给出可验证契约，启动独立 fallback evaluator。
+fallback_after_minutes = 90
+fallback_turn_minutes = 25

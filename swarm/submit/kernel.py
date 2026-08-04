@@ -26,7 +26,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
@@ -83,6 +85,9 @@ class PushResult:
 
 def _run(cmd: list[str], timeout: float = 900.0) -> tuple[int, str]:
     """Run a kaggle CLI command; never raise, the text is the diagnosis."""
+    if cmd and cmd[0] == "kaggle":
+        beside = Path(sys.executable).parent / "kaggle"
+        cmd = [str(beside) if beside.is_file() else (shutil.which("kaggle") or "kaggle"), *cmd[1:]]
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except FileNotFoundError:
@@ -135,6 +140,8 @@ def make_metadata(
     slug: str,
     accelerator: str,
     dataset_sources: list[str] | None = None,
+    kernel_sources: list[str] | None = None,
+    model_sources: list[str] | None = None,
 ) -> dict:
     """kernel-metadata.json for one submission kernel.
 
@@ -166,7 +173,8 @@ def make_metadata(
         "machine_shape": ACCEL_MACHINE_SHAPE[accel],
         "dataset_sources": list(dataset_sources or []),
         "competition_sources": [slug],
-        "kernel_sources": [],
+        "kernel_sources": list(kernel_sources or []),
+        "model_sources": list(model_sources or []),
     }
 
 
@@ -275,6 +283,19 @@ def fetch_log(kernel_ref: str, tail_chars: int = 8000) -> str:
         return text[-tail_chars:]
 
 
+def kernel_status_once(ref: str) -> tuple[str, str]:
+    """Read one remote status without turning a still-running job into an error."""
+    _rc, raw = _run(["kaggle", "kernels", "status", ref], timeout=180)
+    status = parse_status(raw)
+    if status in _TERMINAL:
+        return _TERMINAL[status], raw
+    if status in _RUNNING:
+        return "running", raw
+    if status is None and "not found" in raw.lower():
+        return "error", raw
+    return "unknown", raw
+
+
 def poll_kernel(
     ref: str, timeout_s: float = 2700.0, interval_s: float = 30.0
 ) -> tuple[str, str]:
@@ -288,15 +309,17 @@ def poll_kernel(
     deadline = time.time() + timeout_s
     last_raw = ""
     while time.time() < deadline:
-        _rc, raw = _run(["kaggle", "kernels", "status", ref], timeout=180)
+        current, raw = kernel_status_once(ref)
         last_raw = raw
-        status = parse_status(raw)
-        if status in _TERMINAL:
-            final = _TERMINAL[status]
-            log = fetch_log(ref) if final != "complete" else raw
-            return final, log
-        if status is None and "not found" in raw.lower():
+        if current in {"complete", "cancelled"}:
+            log = fetch_log(ref) if current != "complete" else raw
+            return current, log
+        if current == "error":
+            log = fetch_log(ref)
+            if log and "no log available" not in log:
+                raw = log
             return "error", raw
+        status = parse_status(raw)
         if status is not None and status not in _RUNNING:
             # A status Kaggle added since this was written: treat as non-terminal
             # but keep the text, so a stuck poll is diagnosable from the log tail.

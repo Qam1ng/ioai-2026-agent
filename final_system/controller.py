@@ -24,6 +24,7 @@ from search_system.ioai_agent_system.search_orchestrator import (
 from .broker import SubmissionBroker
 from .calibration import FeedbackCalibrator
 from .config import SystemConfig
+from .day_gate import DayResourceGate
 from .evaluation import freeze_contract
 from .io import append_jsonl, atomic_json, read_json, sha256_file, tree_hash
 from .kaggle import DryRunAdapter, KaggleAdapter
@@ -35,6 +36,7 @@ from .runners import (
     run_lane_loop,
 )
 from .selection import SelectionManager
+from .security import AgentSandbox, build_agent_sandbox, verify_agent_sandbox
 
 ROOT = Path(__file__).resolve().parents[1]
 _REQUIRED_SEARCH = (
@@ -66,7 +68,8 @@ class FinalController:
     def __init__(
         self, *, config: SystemConfig, slug: str, assets_dir: Path,
         duration_minutes: float, competition_mode: str, kaggle_user: str,
-        live: bool, run_id: str = "",
+        live: bool, run_id: str = "", resource_pool_id: str = "",
+        floor_group_id: str = "", day_slugs: tuple[str, ...] = (),
     ):
         if duration_minutes <= 0:
             raise ValueError("duration_minutes must be positive")
@@ -74,6 +77,15 @@ class FinalController:
             raise ValueError("competition_mode must be practice or formal")
         if live and not kaggle_user:
             raise ValueError("--kaggle-user is required with --live")
+        if live and (
+            not resource_pool_id or not floor_group_id or slug not in day_slugs
+        ):
+            raise ValueError(
+                "--resource-pool-id, --floor-group-id and --day-slugs containing "
+                "this slug are required with --live"
+            )
+        if live and competition_mode == "formal" and len(set(day_slugs)) != 3:
+            raise ValueError("formal live mode requires exactly three --day-slugs")
         self.config = config
         self.slug = slug
         self.assets_dir = Path(assets_dir).expanduser().resolve()
@@ -81,6 +93,9 @@ class FinalController:
         self.competition_mode = competition_mode
         self.kaggle_user = kaggle_user
         self.live = live
+        self.resource_pool_id = resource_pool_id
+        self.floor_group_id = floor_group_id
+        self.day_slugs = tuple(sorted(set(day_slugs)))
         stamp = run_id or datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         self.session = config.run.workspace_root / f"{_safe_id(slug)}-{_safe_id(stamp)}"
         self.search_root = self.session / "search"
@@ -89,12 +104,17 @@ class FinalController:
         self.control = self.session / "control"
         self.lanes = self.session / "lanes"
         self.hearsay_ws = self.lanes / "hearsay"
+        self.fallback_evaluator_ws = self.lanes / "evaluator_fallback"
         self.events = self.control / "controller_events.jsonl"
         self.status_path = self.session / "RUN_STATUS.json"
         self._fallback_snapshot: AssetSnapshot | None = None
         self._hearsay_process: asyncio.subprocess.Process | None = None
         self._selection_task: asyncio.Task | None = None
         self._stable: dict[str, tuple[str, int]] = {}
+        self._candidate_errors_seen: set[str] = set()
+        self._contract_pending_seen: set[str] = set()
+        self._agent_sandbox: AgentSandbox | None = None
+        self._fallback_evaluator_task: asyncio.Task | None = None
 
     def _event(self, event: str, **payload: Any) -> None:
         append_jsonl(self.events, {"timestamp": time.time(), "event": event, **payload})
@@ -102,21 +122,42 @@ class FinalController:
     def _claude_runner(
         self, profile_dir: Path, *, model: str | None = None,
         effort: str | None = None, allowed_tools: str | None = None,
+        sandbox: AgentSandbox | None = None,
     ) -> ClaudeSubscriptionRunner:
         c = self.config.claude
         return ClaudeSubscriptionRunner(
             binary=c.binary, model=model or c.model, effort=effort or c.effort,
             profile_dir=profile_dir,
+            sandbox=sandbox or self._agent_sandbox,
             **({"allowed_tools": allowed_tools} if allowed_tools is not None else {}),
         )
 
-    def _codex_runner(self) -> OpenRouterCodexRunner:
+    def _codex_runner(
+        self, *, sandbox: AgentSandbox | None = None
+    ) -> OpenRouterCodexRunner:
         c = self.config.codex
         return OpenRouterCodexRunner(
             binary=c.binary, model=c.model, effort=c.effort,
             provider_id=c.provider_id, base_url=c.base_url,
             api_key_env=c.api_key_env,
             supports_web_search=c.supports_web_search,
+            sandbox=sandbox or self._agent_sandbox,
+        )
+
+    def _sandbox_for(
+        self, writable_root: Path, *, read_only_roots: tuple[Path, ...] = ()
+    ) -> AgentSandbox | None:
+        if self._agent_sandbox is None:
+            return None
+        return build_agent_sandbox(
+            probe_secret=self.control / "security" / "sandbox_probe_secret",
+            protected_write_roots=(
+                ROOT, self.session, self.config.resources.root, self.assets_dir,
+            ),
+            writable_roots=(writable_root,),
+            read_only_roots=read_only_roots,
+            protected_read_roots=(self.config.run.workspace_root,),
+            readable_roots=(writable_root, *read_only_roots),
         )
 
     def _prepare(self) -> None:
@@ -137,13 +178,20 @@ class FinalController:
 
     async def _run_search(self) -> Path:
         c = self.config.search
+        sandbox = self._sandbox_for(
+            self.search_root, read_only_roots=(self.assets_dir,)
+        )
         runners: dict[str, Any] = {
             "claude": self._claude_runner(
-                self.config.claude.integrated_profile_dir
+                self.config.claude.integrated_profile_dir, sandbox=sandbox
             ),
-            "codex": self._codex_runner(),
+            "codex": self._codex_runner(sandbox=sandbox),
         }
-        duration = max(1, int(min(c.duration_minutes, self.duration_minutes) * 60))
+        # 短排练不能让 Search 吃完整个窗口；正式 6h 仍使用配置的 60min。
+        duration = max(
+            1,
+            int(min(c.duration_minutes, self.duration_minutes * 0.25) * 60),
+        )
         search_config = SearchRunConfig(
             assets_dir=self.assets_dir,
             output_root=self.search_root,
@@ -223,6 +271,35 @@ class FinalController:
                 return candidate
         return None
 
+    def _candidate_feedback(self, lane: str, payload: dict[str, Any]) -> None:
+        append_jsonl(
+            self.control / "feedback" / f"{lane}.jsonl",
+            {
+                "schema_version": 1,
+                "event": "candidate_registration",
+                "timestamp": time.time(),
+                **payload,
+            },
+        )
+
+    def _report_candidate_record(self, record: dict) -> None:
+        evaluation = record.get("evaluation", {})
+        if record.get("status") == "eligible" and evaluation.get("status") in {
+            "ok", "pending_contract",
+        }:
+            return
+        self._candidate_feedback(
+            record["source_lane"],
+            {
+                "candidate_id": record.get("candidate_id"),
+                "status": record.get("status"),
+                "format": record.get("format"),
+                "kernel_format": record.get("kernel_format"),
+                "evaluation": evaluation,
+                "action": "publish a corrected immutable candidate with a new id",
+            },
+        )
+
     async def _start_hearsay(
         self, *, bundle: Path | None, assets: Path,
         exploration_deadline: float, submission_mode: str,
@@ -242,6 +319,19 @@ class FinalController:
         ]
         if bundle:
             command.extend(["--search-bundle", str(bundle)])
+        sandbox = self._sandbox_for(
+            self.hearsay_ws,
+            read_only_roots=tuple(
+                path for path in (
+                    assets,
+                    bundle,
+                    self.control / "BROKER_STATUS.json",
+                    self.control / "feedback" / "hearsay.jsonl",
+                ) if path is not None
+            ),
+        )
+        if sandbox is not None:
+            command = sandbox.wrap(command)
         env = {
             key: value for key, value in os.environ.items()
             if key in {
@@ -250,7 +340,7 @@ class FinalController:
                 "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "CUDA_VISIBLE_DEVICES",
             }
         }
-        home = self.lanes / ".hearsay_home"; home.mkdir(exist_ok=True)
+        home = self.hearsay_ws / ".agent_home"; home.mkdir(parents=True, exist_ok=True)
         env["HOME"] = str(home)
         env["CLAUDE_CONFIG_DIR"] = str(
             self.config.claude.integrated_profile_dir
@@ -282,6 +372,65 @@ class FinalController:
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
 
+    async def _run_fallback_evaluator(
+        self, *, started: float, exploration_deadline: float, assets: Path
+    ) -> None:
+        delay_minutes = min(
+            self.config.evaluation.fallback_after_minutes,
+            max(1.0, self.duration_minutes * 0.25),
+        )
+        await asyncio.sleep(max(0.0, started + delay_minutes * 60 - time.monotonic()))
+        if (self.eval_root / "contract.json").is_file() \
+                or time.monotonic() >= exploration_deadline:
+            return
+        self.fallback_evaluator_ws.mkdir(parents=True, exist_ok=True)
+        _link(assets, self.fallback_evaluator_ws / "OFFICIAL_ASSETS")
+        prompt = f"""你是独立的 IOAI 公共验证契约 fallback evaluator。主 evaluator
+在规定时间内没有产出可冻结标尺。只读取 `{self.fallback_evaluator_ws / 'OFFICIAL_ASSETS'}`
+中的原始比赛资产，独立确定官方 metric 和无泄漏验证划分；不要建模或生成 submission。
+
+在当前目录生成且只生成以下四个核心 artifact：
+1. metric.py，暴露 score(y_true, y_pred)。
+2. folds.json，包含 ids/fold/labels/scheme，并覆盖真实验证单元。
+3. metric_tests.json，格式为 {{"cases":[{{"y_true":[...],"y_pred":[...],
+   "expected":0.0,"tolerance":1e-8}}]}}，expected 必须手算。
+4. contract_evidence.json，六个非空字段：metric_name、direction、metric_source、
+   id_source、label_source、split_rationale；direction 约束是
+   `{self.config.run.metric_direction}`。若这里是 `auto`，必须根据官方证据填写
+   `maximize` 或 `minimize`；source 必须是实际资产路径。
+
+完成前自己运行 metric tests，并用
+`{sys.executable} -m native.scripts.checkfolds --file folds.json` 检查划分。不要访问 Kaggle，
+不要读取其他路线，也不要修改 OFFICIAL_ASSETS。"""
+        runner = self._claude_runner(
+            self.config.claude.integrated_profile_dir,
+            sandbox=self._sandbox_for(
+                self.fallback_evaluator_ws, read_only_roots=(assets,)
+            ),
+        )
+        timeout = min(
+            self.config.evaluation.fallback_turn_minutes * 60,
+            max(1.0, exploration_deadline - time.monotonic()),
+        )
+        self._event("fallback_evaluator_started", timeout_seconds=timeout)
+        try:
+            result = await runner.run(
+                agent_id="fallback-evaluator",
+                role="evaluation_fallback",
+                prompt=prompt,
+                workdir=self.fallback_evaluator_ws,
+                trace_dir=self.control / "trajectories" / "evaluator_fallback",
+                timeout_s=timeout,
+            )
+            self._event(
+                "fallback_evaluator_finished",
+                exit_code=result.exit_code,
+                timed_out=result.timed_out,
+                errors=result.errors,
+            )
+        finally:
+            await runner.terminate_all()
+
     def _register_direct(self, registry: CandidateRegistry, lane: str) -> int:
         count = 0
         outbox = self.lanes / lane / "outbox"
@@ -290,16 +439,34 @@ class FinalController:
                 continue
             try:
                 before = len(registry.records())
-                registry.register(candidate, source_lane=lane)
-                count += len(registry.records()) > before
+                record = registry.register(candidate, source_lane=lane)
+                is_new = len(registry.records()) > before
+                count += is_new
+                if is_new:
+                    self._report_candidate_record(record)
             except Exception as exc:  # noqa: BLE001
-                self._event(
-                    "candidate_rejected", lane=lane, path=str(candidate),
-                    error=f"{type(exc).__name__}: {exc}",
-                )
+                error = f"{type(exc).__name__}: {exc}"
+                key = f"{candidate}:{error}"
+                if key not in self._candidate_errors_seen:
+                    self._candidate_errors_seen.add(key)
+                    self._event(
+                        "candidate_rejected", lane=lane, path=str(candidate),
+                        error=error,
+                    )
+                    self._candidate_feedback(
+                        lane,
+                        {
+                            "candidate_path": str(candidate),
+                            "status": "rejected",
+                            "errors": [error],
+                            "action": "fix the artifact and publish a new candidate id",
+                        },
+                    )
         return count
 
-    def _register_hearsay(self, registry: CandidateRegistry) -> int:
+    def _register_hearsay(
+        self, registry: CandidateRegistry, submission_mode: str
+    ) -> int:
         count = 0
         for solver in sorted(self.hearsay_ws.glob("solver_*")):
             if not (solver / "out" / "submission.csv").is_file():
@@ -317,19 +484,37 @@ class FinalController:
                 "schema_version": 1,
                 "candidate_id": f"{solver.name}-{fingerprint[:10]}",
                 "source_lane": "hearsay",
-                "submission_mode": "unknown",
+                "submission_mode": submission_mode,
                 "accelerator": "p100",
                 "purpose": f"stable HearSay snapshot from {solver.name}",
             }
             try:
                 before = len(registry.records())
-                registry.register(solver, source_lane="hearsay", manifest=manifest)
-                count += len(registry.records()) > before
-            except Exception as exc:  # noqa: BLE001
-                self._event(
-                    "candidate_rejected", lane="hearsay", path=str(solver),
-                    error=f"{type(exc).__name__}: {exc}",
+                record = registry.register(
+                    solver, source_lane="hearsay", manifest=manifest
                 )
+                is_new = len(registry.records()) > before
+                count += is_new
+                if is_new:
+                    self._report_candidate_record(record)
+            except Exception as exc:  # noqa: BLE001
+                error = f"{type(exc).__name__}: {exc}"
+                key = f"{solver}:{error}"
+                if key not in self._candidate_errors_seen:
+                    self._candidate_errors_seen.add(key)
+                    self._event(
+                        "candidate_rejected", lane="hearsay", path=str(solver),
+                        error=error,
+                    )
+                    self._candidate_feedback(
+                        "hearsay",
+                        {
+                            "candidate_path": str(solver),
+                            "status": "rejected",
+                            "errors": [error],
+                            "action": "fix the artifact and publish a stable new version",
+                        },
+                    )
         return count
 
     async def _monitor(
@@ -337,7 +522,7 @@ class FinalController:
         calibrator: FeedbackCalibrator,
         selection_manager: SelectionManager | None,
         started: float, deadline: float, exploration_deadline: float,
-        submission_deadline: float,
+        submission_deadline: float, submission_mode: str,
     ) -> None:
         last_scores = 0.0
         last_manager_started = 0.0
@@ -374,20 +559,40 @@ class FinalController:
                         error=f"{type(exc).__name__}: {exc}",
                     )
             active_submissions.difference_update(completed)
-            if not contract_frozen and self.hearsay_ws.exists():
-                try:
-                    contract = freeze_contract(
-                        self.hearsay_ws, self.eval_root,
-                        direction=self.config.run.metric_direction,
-                    )
-                    contract_frozen = True
-                    self._event("evaluation_contract_frozen", **contract)
-                except (FileNotFoundError, ValueError):
-                    pass
+            if not contract_frozen:
+                for source_name, source in (
+                    ("hearsay", self.hearsay_ws),
+                    ("fallback", self.fallback_evaluator_ws),
+                ):
+                    if not source.exists():
+                        continue
+                    try:
+                        contract = freeze_contract(
+                            source, self.eval_root,
+                            direction=self.config.run.metric_direction,
+                        )
+                        contract_frozen = True
+                        broker.set_direction(contract["direction"])
+                        self._event(
+                            "evaluation_contract_frozen",
+                            evaluator_source=source_name,
+                            **contract,
+                        )
+                        break
+                    except (FileNotFoundError, ValueError) as exc:
+                        detail = str(exc)[:500]
+                        key = f"{source_name}:{detail}"
+                        if key not in self._contract_pending_seen:
+                            self._contract_pending_seen.add(key)
+                            self._event(
+                                "evaluation_contract_pending",
+                                evaluator_source=source_name,
+                                detail=detail,
+                            )
             added = self._register_direct(registry, "codex")
             added += self._register_direct(registry, "claude")
             if self.hearsay_ws.exists():
-                added += self._register_hearsay(registry)
+                added += self._register_hearsay(registry, submission_mode)
             if contract_frozen:
                 registry.refresh_evaluations()
             elapsed = time.monotonic() - started
@@ -491,8 +696,32 @@ class FinalController:
 
     async def run(self) -> Path:
         self._prepare()
+        try:
+            probe_secret = self.control / "security" / "sandbox_probe_secret"
+            self._agent_sandbox = build_agent_sandbox(
+                probe_secret=probe_secret,
+                protected_write_roots=(
+                    ROOT, self.session, self.config.resources.root, self.assets_dir,
+                ),
+            )
+            verify_agent_sandbox(
+                self._agent_sandbox, probe_secret=probe_secret
+            )
+            self._event(
+                "agent_sandbox_verified",
+                denied_paths=[str(path) for path in self._agent_sandbox.denied_paths],
+                protected_write_roots=[
+                    str(path) for path in self._agent_sandbox.protected_write_roots
+                ],
+            )
+        except RuntimeError as exc:
+            if self.live:
+                raise
+            # 非 live 诊断可在不支持 Seatbelt 的系统运行；正式提交始终 fail-closed。
+            self._event("agent_sandbox_unavailable", detail=str(exc))
         started = time.monotonic()
         deadline = started + self.duration_minutes * 60
+        wall_deadline = time.time() + self.duration_minutes * 60
         stop_before = min(
             self.config.run.stop_exploration_minutes_before_end,
             max(0.0, self.duration_minutes * 0.45),
@@ -509,10 +738,28 @@ class FinalController:
 
         codex_work = self._prepare_direct_lane("codex", assets)
         claude_work = self._prepare_direct_lane("claude", assets)
+        resource_gate: DayResourceGate | None = None
         if self.live:
+            resources = self.config.resources
+            resource_gate = DayResourceGate(
+                resources.root / _safe_id(self.resource_pool_id),
+                pool_id=self.resource_pool_id,
+                floor_group_id=self.floor_group_id,
+                expected_slugs=self.day_slugs,
+                gpu_limit_hours=resources.gpu_quota_hours,
+                gpu_concurrency=resources.gpu_concurrency,
+                cpu_concurrency=resources.cpu_concurrency,
+                poll_seconds=resources.acquire_poll_seconds,
+            )
             adapter: Any = KaggleAdapter(
                 slug=self.slug, root=self.control, kaggle_user=self.kaggle_user,
                 submission_mode=self.config.run.submission_mode,
+                assets=assets,
+                resource_gate=resource_gate,
+                competition_deadline_epoch=wall_deadline,
+                default_gpu_kernel_minutes=resources.default_gpu_kernel_minutes,
+                default_cpu_kernel_minutes=resources.default_cpu_kernel_minutes,
+                kernel_start_margin_minutes=resources.kernel_start_margin_minutes,
             )
             remaining = await asyncio.to_thread(adapter.remaining_today)
             if remaining is None:
@@ -548,6 +795,9 @@ class FinalController:
             model=selection.model,
             effort=selection.effort,
             allowed_tools="Read",
+            sandbox=self._sandbox_for(
+                self.control / "selection_manager" / "agent_work"
+            ),
         ) if selection.enabled else None
         selection_manager = SelectionManager(
             self.control / "selection_manager",
@@ -574,11 +824,28 @@ class FinalController:
             ),
             calibration_path=calibrator.latest_path,
             manager_fallback_seconds=selection.fallback_seconds,
+            max_retryable_attempts=self.config.run.max_retryable_attempts,
+            retry_backoff_seconds=self.config.run.retry_backoff_seconds,
         )
 
-        codex_runner = self._codex_runner()
+        codex_runner = self._codex_runner(
+            sandbox=self._sandbox_for(
+                codex_work,
+                read_only_roots=(
+                    assets, self.eval_root,
+                    self.control / "feedback" / "codex.jsonl",
+                ),
+            )
+        )
         claude_runner = self._claude_runner(
-            self.config.claude.direct_profile_dir
+            self.config.claude.direct_profile_dir,
+            sandbox=self._sandbox_for(
+                claude_work,
+                read_only_roots=(
+                    assets, self.eval_root,
+                    self.control / "feedback" / "claude.jsonl",
+                ),
+            ),
         )
         direct_tasks = [
             asyncio.create_task(run_lane_loop(
@@ -586,6 +853,7 @@ class FinalController:
                 prompt=direct_prompt(
                     lane="codex", slug=self.slug, workdir=codex_work,
                     deadline_minutes=max(1, (exploration_deadline-started)/60),
+                    submission_mode=submission_mode,
                 ),
                 continuation=continuation_prompt("codex"), workdir=codex_work,
                 trace_dir=self.control / "trajectories" / "codex",
@@ -598,6 +866,7 @@ class FinalController:
                 prompt=direct_prompt(
                     lane="claude", slug=self.slug, workdir=claude_work,
                     deadline_minutes=max(1, (exploration_deadline-started)/60),
+                    submission_mode=submission_mode,
                 ),
                 continuation=continuation_prompt("claude"), workdir=claude_work,
                 trace_dir=self.control / "trajectories" / "claude",
@@ -628,12 +897,21 @@ class FinalController:
             )
 
         hearsay_task = asyncio.create_task(search_then_hearsay())
+        if self.config.hearsay.enabled:
+            self._fallback_evaluator_task = asyncio.create_task(
+                self._run_fallback_evaluator(
+                    started=started,
+                    exploration_deadline=exploration_deadline,
+                    assets=assets,
+                )
+            )
         monitor_task = asyncio.create_task(self._monitor(
             registry=registry, broker=broker, calibrator=calibrator,
             selection_manager=selection_manager,
             started=started, deadline=deadline,
             exploration_deadline=exploration_deadline,
             submission_deadline=submission_deadline,
+            submission_mode=submission_mode,
         ))
         try:
             await asyncio.sleep(max(0, exploration_deadline - time.monotonic()))
@@ -642,10 +920,16 @@ class FinalController:
                 codex_runner.terminate_all(), claude_runner.terminate_all(),
                 self._stop_hearsay(), return_exceptions=True,
             )
-            for task in direct_tasks + [hearsay_task]:
+            extra_tasks = (
+                [self._fallback_evaluator_task]
+                if self._fallback_evaluator_task is not None else []
+            )
+            for task in direct_tasks + [hearsay_task, *extra_tasks]:
                 if not task.done():
                     task.cancel()
-            await asyncio.gather(*direct_tasks, hearsay_task, return_exceptions=True)
+            await asyncio.gather(
+                *direct_tasks, hearsay_task, *extra_tasks, return_exceptions=True
+            )
             await monitor_task
         finally:
             if not monitor_task.done():
@@ -657,6 +941,12 @@ class FinalController:
                     self._selection_task, return_exceptions=True
                 )
                 self._selection_task = None
+            if self._fallback_evaluator_task is not None \
+                    and not self._fallback_evaluator_task.done():
+                self._fallback_evaluator_task.cancel()
+                await asyncio.gather(
+                    self._fallback_evaluator_task, return_exceptions=True
+                )
             await asyncio.gather(
                 codex_runner.terminate_all(), claude_runner.terminate_all(),
                 *(
@@ -682,6 +972,9 @@ class FinalController:
             "selection_manager": read_json(
                 selection_manager.status_path, {}
             ) if selection_manager else {"status": "disabled"},
+            "shared_resources": (
+                resource_gate.status() if resource_gate is not None else None
+            ),
         })
         atomic_json(self.status_path, final_status)
         self._event("run_complete", status=str(self.status_path))

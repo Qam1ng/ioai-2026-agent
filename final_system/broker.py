@@ -38,6 +38,8 @@ class SubmissionBroker:
         recommendation_path: Path | None = None,
         calibration_path: Path | None = None,
         manager_fallback_seconds: float = 0.0,
+        max_retryable_attempts: int = 3,
+        retry_backoff_seconds: float = 60.0,
     ):
         self.root = Path(root)
         self.registry = registry
@@ -59,6 +61,8 @@ class SubmissionBroker:
             if recommendation_path else None
         self.calibration_path = Path(calibration_path) if calibration_path else None
         self.manager_fallback_seconds = manager_fallback_seconds
+        self.max_retryable_attempts = max(1, int(max_retryable_attempts))
+        self.retry_backoff_seconds = max(0.0, float(retry_backoff_seconds))
         self.manager_context_state_path = (
             self.root / "selection_manager" / "context_state.json"
         )
@@ -86,6 +90,12 @@ class SubmissionBroker:
                 raise ValueError("existing Broker quota contract differs from config")
         self.write_status()
 
+    def set_direction(self, direction: str) -> None:
+        if direction not in {"maximize", "minimize"}:
+            raise ValueError("resolved metric direction must be maximize or minimize")
+        self.direction = direction
+        self.write_status()
+
     def _load(self) -> dict:
         return read_json(self.state_path, {"submissions": []})
 
@@ -101,7 +111,9 @@ class SubmissionBroker:
 
     @staticmethod
     def _reserved(row: dict) -> bool:
-        return row.get("result", {}).get("status") in {"reserved", "ambiguous"}
+        return row.get("result", {}).get("status") in {
+            "reserved", "ambiguous", "external_running",
+        }
 
     def committed(self) -> list[dict]:
         """Slots already consumed or held by an in-flight/crash-ambiguous call."""
@@ -138,6 +150,7 @@ class SubmissionBroker:
             "by_source_lane": dict(by_source),
             "fraction_elapsed": fraction_elapsed,
             "submission_authority": "final_system.SubmissionBroker",
+            "metric_direction": self.direction,
         }
         atomic_json(self.status_path, status)
         return status
@@ -228,7 +241,7 @@ class SubmissionBroker:
     def _sort(
         self, records: list[dict], calibration: dict | None = None,
     ) -> list[dict]:
-        sign = 1 if self.direction == "maximize" else -1
+        sign = -1 if self.direction == "minimize" else 1
         def key(record: dict) -> tuple[bool, float, float]:
             score = self._selection_score(record, calibration)
             return (
@@ -243,12 +256,34 @@ class SubmissionBroker:
         )
 
     def _eligible(self) -> list[dict]:
-        attempts = {row["candidate_id"] for row in self.submissions()}
+        now = time.time()
+        attempts: dict[str, list[dict]] = {}
+        for row in self.submissions():
+            attempts.setdefault(row["candidate_id"], []).append(row)
+
+        def blocked(candidate_id: str) -> bool:
+            rows = attempts.get(candidate_id, [])
+            retryable = 0
+            for row in rows:
+                result = row.get("result", {})
+                status = result.get("status")
+                if self._consumed(row) or status in {
+                    "reserved", "ambiguous", "external_running", "rejected",
+                    "execution_error", "resource_exhausted", "deadline_blocked",
+                }:
+                    return True
+                if status == "retryable":
+                    retryable += 1
+                    if float(result.get("retry_after", 0)) > now:
+                        return True
+            return retryable >= self.max_retryable_attempts
+
         return [
             record for record in self.registry.records()
             if record.get("status") == "eligible"
-            and record["candidate_id"] not in attempts
+            and not blocked(record["candidate_id"])
             and record.get("format", {}).get("valid")
+            and record.get("kernel_format", {}).get("valid", True)
         ]
 
     def _best_submitted_score(self, calibration: dict) -> float | None:
@@ -488,6 +523,10 @@ class SubmissionBroker:
                     "selection_reason": selection_reason,
                     "local_score": self._score(record),
                     "reserved_at": time.time(),
+                    "attempt_number": 1 + sum(
+                        row.get("candidate_id") == record["candidate_id"]
+                        for row in self.submissions()
+                    ),
                     "result": {"consumed": False, "status": "reserved"},
                 }
             state = self._load()
@@ -510,6 +549,17 @@ class SubmissionBroker:
                 "status": "ambiguous",
                 "detail": f"{type(exc).__name__}: {exc}",
             }
+        # 兼容旧 Adapter 的非消耗型 error；这类已知失败不能永久拉黑候选，
+        # 但必须受退避和最大尝试次数约束，避免紧循环耗尽时间。
+        if (
+            result_value.get("status") == "error"
+            and not result_value.get("consumed")
+        ):
+            result_value["status"] = "retryable"
+        if result_value.get("status") == "retryable":
+            result_value.setdefault(
+                "retry_after", time.time() + self.retry_backoff_seconds
+            )
         with locked(self.state_path):
             state = self._load()
             for row in state["submissions"]:
@@ -528,25 +578,93 @@ class SubmissionBroker:
         return completed
 
     def refresh_scores(self) -> int:
-        scores = self.adapter.scores()
-        if not scores:
-            return 0
         updates: list[dict] = []
+        reconcile_method = getattr(self.adapter, "reconcile_external", None)
+        if callable(reconcile_method):
+            pending = [
+                row for row in self.submissions()
+                if row.get("result", {}).get("status") == "external_running"
+            ]
+            for stale in pending:
+                record = self.registry.get(stale["candidate_id"])
+                if record is None:
+                    continue
+                try:
+                    reconciled = reconcile_method(record, stale)
+                except Exception:  # noqa: BLE001
+                    # 远端状态查询失败不证明 Kernel 已终止；保留 lease，下轮再查。
+                    continue
+                if reconciled is None:
+                    continue
+                result_value = reconciled.to_dict()
+                if result_value.get("status") == "retryable":
+                    result_value.setdefault(
+                        "retry_after", time.time() + self.retry_backoff_seconds
+                    )
+                changed_row = None
+                with locked(self.state_path):
+                    state = self._load()
+                    for row in state["submissions"]:
+                        if (
+                            row["submission_id"] == stale["submission_id"]
+                            and row.get("result", {}).get("status")
+                            == "external_running"
+                        ):
+                            row["result"] = result_value
+                            row["completed_at"] = time.time()
+                            changed_row = row.copy()
+                            break
+                    if changed_row is not None:
+                        atomic_json(self.state_path, state)
+                if changed_row is not None:
+                    if result_value.get("consumed"):
+                        self.registry.mark_submitted(record["candidate_id"])
+                    updates.append(changed_row)
+                    self._emit_feedback(changed_row, "external_kernel_reconciled")
+
+        states_method = getattr(self.adapter, "submission_states", None)
+        states = states_method() if callable(states_method) else {
+            key: {"public_score": value, "exists": True}
+            for key, value in self.adapter.scores().items()
+        }
+        if not states:
+            self.write_status()
+            return len(updates)
+        score_updates: list[tuple[dict, str]] = []
         with locked(self.state_path):
             state = self._load()
             for row in state["submissions"]:
-                score = scores.get(row["submission_id"])
-                if score is None or row.get("leaderboard_score") == score:
+                external = states.get(row["submission_id"])
+                if not external:
                     continue
-                row["leaderboard_score"] = score
-                row["scored_at"] = time.time()
-                if row.get("result", {}).get("status") == "ambiguous":
+                changed = False
+                score_changed = False
+                if row.get("result", {}).get("status") == "ambiguous" \
+                        and external.get("exists"):
                     row["result"]["consumed"] = True
                     row["result"]["status"] = "submitted_reconciled"
-                updates.append(row.copy())
-            if updates:
+                    changed = True
+                score = external.get("public_score")
+                if score is not None and row.get("leaderboard_score") != score:
+                    row["leaderboard_score"] = score
+                    row["scored_at"] = time.time()
+                    changed = True
+                    score_changed = True
+                if changed:
+                    score_updates.append((
+                        row.copy(),
+                        "leaderboard_score" if score_changed
+                        else "submission_reconciled",
+                    ))
+            if score_updates:
                 atomic_json(self.state_path, state)
-        for row in updates:
-            self._emit_feedback(row, "leaderboard_score")
+        for row, event in score_updates:
+            if row.get("result", {}).get("status") == "submitted_reconciled":
+                self.registry.mark_submitted(row["candidate_id"])
+                hook = getattr(self.adapter, "on_reconciled_submission", None)
+                if callable(hook):
+                    hook(row)
+            self._emit_feedback(row, event)
+        updates.extend(row for row, _event in score_updates)
         self.write_status()
         return len(updates)

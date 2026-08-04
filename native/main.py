@@ -731,7 +731,7 @@ harness 将候选送来时，决定提交哪个、何时提交。两部分之间
 和可靠 split 的程度。确定性侦察已经完成，结果在 `recon.md` 和事实板中，
 不要重复做；寻找泄漏或重复帧不是你的职责。
 
-在 workspace 根目录（{ws}）生成两个 artifact：
+在 workspace 根目录（{ws}）生成四个 artifact；四者齐备且通过脚本检查后才会冻结：
 
 1. `metric.py`：`{slug}` 的官方 metric，暴露
    `def score(y_true, y_pred) -> float | dict`。完成前必须用一组手算出正确值的
@@ -756,6 +756,15 @@ harness 将候选送来时，决定提交哪个、何时提交。两部分之间
 
    冻结后，把划分方案和理由发布到事实板。本轮所有数字都来自它，因此每个
    solver 都必须知道它的含义。
+
+3. `metric_tests.json`：至少一个你已经手算出答案的测试，严格格式为
+   `{{"cases":[{{"y_true":[...],"y_pred":[...],"expected":0.0,
+   "tolerance":1e-8}}]}}`。harness 会重新运行这些测试，不接受只在文字中声称
+   “已验证”。
+
+4. `contract_evidence.json`：记录 `metric_name`、`direction`（maximize/minimize）、
+   `metric_source`、`id_source`、`label_source`、`split_rationale` 六个非空字段。
+   source 必须指向实际读取的题面/数据/代码位置，不能只写“根据理解”。
 
 如果题目材料确实无法唯一确定 metric，不要为了证明它而卡住。实现最可信的
 解释，在 `metric.py` 顶部明确写出假设，以 `data` 事实发布到事实板，然后
@@ -2391,7 +2400,11 @@ async def run(args) -> None:
                 trace.log("folds_invalid", problems=v.get("problems"))
                 facts.board().post("env", msg[:300], src="harness")
 
-        missing = [f for f in ("metric.py", "folds.json") if not (ws / f).exists()]
+        required = (
+            "metric.py", "folds.json", "metric_tests.json",
+            "contract_evidence.json",
+        )
+        missing = [name for name in required if not (ws / name).exists()]
         if missing:
             msg = (f"evaluator did not produce {missing} — scoring, promotion and "
                    f"LKG are all inert until they exist. Build them yourself "
@@ -2401,8 +2414,9 @@ async def run(args) -> None:
             facts.board().post("env", msg, src="harness")
         else:
             facts.board().post(
-                "env", "metric.py and folds.json are frozen and ready — score "
-                       "candidates with native/scripts/evaluate.py.", src="harness")
+                "env", "metric.py, folds.json, metric_tests.json and "
+                       "contract_evidence.json are ready — score candidates "
+                       "with native/scripts/evaluate.py.", src="harness")
 
     # The evaluator runs ALONGSIDE the solvers, not in front of them. In run 1 it
     # held the start gate for ten of the twenty-three minutes; nothing a solver

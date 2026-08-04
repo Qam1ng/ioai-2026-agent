@@ -52,8 +52,9 @@ class SelectionManager:
         self.status_path = self.root / "status.json"
         self.inputs = self.root / "inputs"
         self.history = self.root / "history"
+        self.agent_work = self.root / "agent_work"
         self.traces = self.root.parent / "trajectories" / "selection_manager"
-        for path in (self.inputs, self.history, self.traces):
+        for path in (self.inputs, self.history, self.agent_work, self.traces):
             path.mkdir(parents=True, exist_ok=True)
 
     def _prompt(self, context: dict) -> str:
@@ -107,7 +108,7 @@ IOAI AI Models Track 是限时机器学习竞赛。三个相互独立的解题�
             result = await self.runner.run(
                 agent_id=f"selection-manager-{sequence:04d}",
                 role="selection_manager", prompt=self._prompt(context),
-                workdir=self.root, trace_dir=self.traces,
+                workdir=self.agent_work, trace_dir=self.traces,
                 timeout_s=self.timeout_seconds, persist_session=False,
             )
         except asyncio.CancelledError:
