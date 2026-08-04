@@ -1,0 +1,31 @@
+{
+  "competition": "ioai-2026-ai-models-track-practice-task-1-timed-deps",
+  "audited_at_utc": "2026-08-03T14:05:35Z",
+  "official_files": {
+    "train_rows": 296,
+    "fine_tune_rows": 624,
+    "submission_rows": 363,
+    "audio_files": 1283,
+    "checkpoint_sha256": "8bc0c8246218cf5b9da26ca468f2a4770afc5ba978b170f3a14d335e56af554b",
+    "submission_template_sha256": "1bc01f3de580743b6ff3b3e42d3ed72a6e807076d5c70fef490fc63c1cd2be28",
+    "official_starter_sha256": "0e3d63327ba59d39bfde6839364d64ef0428be834d3790c321d96466c8c285cc"
+  },
+  "class_support": {
+    "old_0_15": [12, 12, 12, 22, 35, 12, 12, 3, 12, 22, 3, 62, 12, 35, 23, 7],
+    "new_16_28": [24, 45, 45, 45, 45, 45, 45, 45, 45, 60, 60, 60, 60]
+  },
+  "checkpoint": {
+    "architecture": "ASTForAudioClassification",
+    "hidden_size": 768,
+    "layers": 12,
+    "attention_heads": 12,
+    "original_labels": 16
+  },
+  "contamination_boundary": {
+    "historical_task_familiarity": true,
+    "clean_blind_benchmark_claim_allowed": false,
+    "historical_prediction_or_test_structure_used": false,
+    "test_global_statistics_used": false,
+    "submission_purpose": "organizer-approved timed Kaggle flow rehearsal"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "id": "yangxintong1010/ioai-task1-timed-deps-trace1",
+  "title": "IOAI Task 1 Timed Deps Trace 1",
+  "code_file": "main.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_internet": "false",
+  "dataset_sources": [
+    "kamalkhan/ioai-2026-wheel-dataset"
+  ],
+  "competition_sources": [
+    "ioai-2026-ai-models-track-practice-task-1-timed-deps"
+  ],
+  "kernel_sources": []
+}

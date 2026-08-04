@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "competition": "ioai-2026-ai-models-track-practice-task-1-timed-deps",
+  "captured_at_utc": "2026-08-03T14:25:53Z",
+  "backend": "kaggle_notebook_cli",
+  "submissions": [
+    {
+      "ref": 55213834,
+      "kernel_slug": "yangxintong1010/ioai-timed-deps-fresh-baseline",
+      "kernel_version": 3,
+      "status": "COMPLETE",
+      "public_score": 0.82770,
+      "private_score": null,
+      "output_sha256": "30a51ac41e6257c0bbb35d56945fe6869efb7ed503b51488222d2b5f16fecada"
+    },
+    {
+      "ref": 55213957,
+      "kernel_slug": "yangxintong1010/ioai-timed-deps-geometry",
+      "kernel_version": 1,
+      "status": "COMPLETE",
+      "public_score": 0.83878,
+      "private_score": null,
+      "output_sha256": "4333c03f55b562bcc30237e0873621abf0baf74c2b2071c72d405b057f32c8e7"
+    },
+    {
+      "ref": 55214130,
+      "kernel_slug": "yangxintong1010/ioai-timed-deps-fresh-baseline",
+      "kernel_version": 4,
+      "status": "COMPLETE",
+      "public_score": 0.83232,
+      "private_score": null,
+      "output_sha256": "a1303cae2c7ef1edefa0a9a2e3127249933a24d5ebd890dde3f7ae33ca591adf"
+    }
+  ],
+  "selected_submission_ref": 55213957,
+  "selected_public_score": 0.83878,
+  "selection_rule": "highest confirmed public score",
+  "provisional_leaderboard_rank": 3,
+  "visible_teams": 9,
+  "final_rank_confirmed": false
+}

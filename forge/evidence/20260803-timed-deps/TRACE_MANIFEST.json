@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "sealed_at_utc": "2026-08-03T14:25:53Z",
+  "selected_submission_ref": 55213957,
+  "files": [
+    {
+      "path": "branches/trace_2/solution.py",
+      "sha256": "8e4a14339423b87578ff8a39e0d7b97f4362f472e6c4ac4440a8117e0d718071"
+    },
+    {
+      "path": "out/trace_2_v1/submission.csv",
+      "sha256": "4333c03f55b562bcc30237e0873621abf0baf74c2b2071c72d405b057f32c8e7"
+    },
+    {
+      "path": "out/trace_2_v1/trace_2_metrics.json",
+      "sha256": "19ec5a4c068e6d4ee2c700aa3ee6cd66bb127e94b138556ca91b907eaf89834b"
+    },
+    {
+      "path": "trace/trace_2/final_review.md",
+      "sha256": "56e20eb615923a59785efff0d39fa2296182404fc7301f17d3f9812df1250c72"
+    },
+    {
+      "path": "SUBMISSION_RECEIPTS.json",
+      "sha256": "9602ad995f7bcc4093ee36aa3a7724cd9bf341bd8b13da5b2733cec5e7c0b4a8"
+    },
+    {
+      "path": "FINAL_SELECTION.json",
+      "sha256": "51b47371535d71f127d269bd9bb51cda4ecc68f3fce0930b75312d167211f81f"
+    },
+    {
+      "path": "FINAL_REPORT.md",
+      "sha256": "227ef468d8e360095adfea2773d9e52e996f0bf57d0cdabc2c5898f74370b805"
+    },
+    {
+      "path": "task_config.json",
+      "sha256": "5bec4d4843b4fdc4d406ea2718307f7886f351c5f5321576db49d25146147bcb"
+    }
+  ],
+  "historical_predictions_used": false,
+  "historical_test_structure_used": false,
+  "credentials_included": false
+}

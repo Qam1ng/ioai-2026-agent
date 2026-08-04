@@ -1,0 +1,46 @@
+{
+  "schema_version": 1,
+  "mode": "practice",
+  "status": "ready",
+  "competition_window_minutes": 30,
+  "post_session_report_window_minutes": 15,
+  "hard_wall_seconds": 1800,
+  "model": "codex-current",
+  "reasoning_effort": "current-session",
+  "minimum_codex_cli_version": "0.146.0",
+  "codex_binary": "/Applications/ChatGPT.app/Contents/Resources/codex",
+  "codex_binary_sha256": "68474c6192406b8a0278243c8283b87a84798a69fb498f30c3715861f8082542",
+  "core_tool_definitions_path": "/Users/bytedance/Documents/IOAI/ioai-2026-practice/runs/20260803-2155-timed-deps-live/codex_core_tool_definitions.json",
+  "core_tool_definitions_sha256": "05fd812c9972ca408e6e0cdea1dfdaa2daf0717d1a0d3b001fb3a9b348aba979",
+  "search_policy_path": "/Users/bytedance/Documents/IOAI/ioai-agent-system/config/forge_v2_policy.json",
+  "search_policy_sha256": "3d093e66b4d927d34b9dde0cd7780bdf70827ced8181080df360971462859572",
+  "submission": {
+    "backend": "kaggle_notebook_cli",
+    "adapter_server": "local_kaggle_cli",
+    "adapter_tool": "kaggle",
+    "credential_source": "existing_local_oauth_or_access_token",
+    "max_attempts_per_task": 5,
+    "reserve_attempts_per_task": 1
+  },
+  "resources": {
+    "agent_slots": 4,
+    "local_gpu_job_limit": 0,
+    "remote_submission_job_limit": 2,
+    "internet_access": true
+  },
+  "trace_directory": "/Users/bytedance/Documents/IOAI/ioai-2026-practice/runs/20260803-2155-timed-deps-live/trace",
+  "ledger_path": "/Users/bytedance/Documents/IOAI/ioai-2026-practice/runs/20260803-2155-timed-deps-live/experiment_ledger.csv",
+  "task_count": 1,
+  "tasks": [
+    {
+      "id": "timed_deps_task1",
+      "competition_slug": "ioai-2026-ai-models-track-practice-task-1-timed-deps",
+      "working_directory": "/Users/bytedance/Documents/IOAI/ioai-2026-practice/runs/20260803-2155-timed-deps-live",
+      "metric": "0.5 * old_accuracy + 0.5 * new_accuracy",
+      "output_contract": "/Users/bytedance/Documents/IOAI/ioai-2026-practice/runs/20260803-2155-timed-deps-live/task_config.json",
+      "p95_runtime_seconds": 420,
+      "queue_margin_seconds": 60,
+      "retry_reserve_seconds": 60
+    }
+  ]
+}

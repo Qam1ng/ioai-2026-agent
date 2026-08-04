@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "codex_binary_sha256": "68474c6192406b8a0278243c8283b87a84798a69fb498f30c3715861f8082542",
+  "scope": "Core tools permitted to the IOAI-FORGE harness. App and MCP tools are exported separately from the live session.",
+  "tools": [
+    {
+      "namespace": "functions",
+      "name": "exec_command",
+      "description": "Run a shell command in a PTY or with plain pipes.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cmd": {"type": "string"},
+          "justification": {"type": "string"},
+          "login": {"type": "boolean"},
+          "max_output_tokens": {"type": "integer"},
+          "prefix_rule": {"type": "array", "items": {"type": "string"}},
+          "sandbox_permissions": {
+            "type": "string",
+            "enum": ["use_default", "require_escalated"]
+          },
+          "shell": {"type": "string"},
+          "tty": {"type": "boolean"},
+          "workdir": {"type": "string"},
+          "yield_time_ms": {"type": "integer"}
+        },
+        "required": ["cmd"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "namespace": "functions",
+      "name": "write_stdin",
+      "description": "Write characters to or poll an existing exec session.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "chars": {"type": "string"},
+          "max_output_tokens": {"type": "integer"},
+          "session_id": {"type": "integer"},
+          "yield_time_ms": {"type": "integer"}
+        },
+        "required": ["session_id"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "namespace": "functions",
+      "name": "wait",
+      "description": "Wait on a yielded orchestration cell.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "cell_id": {"type": "string"},
+          "max_tokens": {"type": "integer"},
+          "terminate": {"type": "boolean"},
+          "yield_time_ms": {"type": "integer"}
+        },
+        "required": ["cell_id"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "namespace": "functions",
+      "name": "apply_patch",
+      "description": "Apply a structured patch to local files.",
+      "input_schema": {"type": "string"}
+    },
+    {
+      "namespace": "functions",
+      "name": "update_plan",
+      "description": "Update a task plan with one in-progress step.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "explanation": {"type": "string"},
+          "plan": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "status": {
+                  "type": "string",
+                  "enum": ["pending", "in_progress", "completed"]
+                },
+                "step": {"type": "string"}
+              },
+              "required": ["status", "step"],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": ["plan"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "namespace": "collaboration",
+      "name": "spawn_agent",
+      "description": "Spawn a bounded sub-agent task.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "fork_turns": {"type": "string"},
+          "message": {"type": "string"},
+          "model": {"type": "string"},
+          "reasoning_effort": {"type": "string"},
+          "task_name": {"type": "string"}
+        },
+        "required": ["message", "task_name"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "namespace": "collaboration",
+      "name": "followup_task",
+      "description": "Send follow-up work to an existing sub-agent and trigger a turn.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "message": {"type": "string"},
+          "target": {"type": "string"}
+        },
+        "required": ["message", "target"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "namespace": "collaboration",
+      "name": "send_message",
+      "description": "Queue a message to an existing sub-agent without triggering a turn.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "message": {"type": "string"},
+          "target": {"type": "string"}
+        },
+        "required": ["message", "target"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "namespace": "collaboration",
+      "name": "interrupt_agent",
+      "description": "Interrupt an existing sub-agent turn.",
+      "input_schema": {
+        "type": "object",
+        "properties": {"target": {"type": "string"}},
+        "required": ["target"],
+        "additionalProperties": false
+      }
+    },
+    {
+      "namespace": "collaboration",
+      "name": "list_agents",
+      "description": "List live agents in the current root thread tree.",
+      "input_schema": {
+        "type": "object",
+        "properties": {"path_prefix": {"type": "string"}},
+        "additionalProperties": false
+      }
+    },
+    {
+      "namespace": "collaboration",
+      "name": "wait_agent",
+      "description": "Wait for a mailbox update from a live agent.",
+      "input_schema": {
+        "type": "object",
+        "properties": {"timeout_ms": {"type": "integer"}},
+        "additionalProperties": false
+      }
+    }
+  ]
+}
