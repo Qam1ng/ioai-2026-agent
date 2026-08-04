@@ -138,6 +138,9 @@ def external_context_contract(args, *, evaluator: bool = False) -> str:
   你没有 Kaggle 凭证，也不得用 CLI、Python API 或网络请求自行提交。
 - 仍按原候选契约写 `out/`；外部控制器会对稳定 artifact 做不可变快照，重新
   计算公共验证分数，再决定是否消耗 50 次共享额度。
+- 每个 solver 在自己的根目录同时维护 `candidate.json`，至少声明
+  `accelerator`（`cpu`/`p100`/`t4`）和保守的 `estimated_kernel_minutes`。
+  纯 CPU 方案必须明确写 `cpu`，否则错误占用 GPU 会阻塞另外两道题。
 - 榜单反馈只写入 `{Path(args.external_broker_dir).resolve() / 'feedback' / 'hearsay.jsonl'}`。
   它属于 HearSay 这条线，不会泄露给另外两条独立兜底线。
 """

@@ -100,6 +100,8 @@ class ResourceConfig:
     default_cpu_kernel_minutes: float
     kernel_start_margin_minutes: float
     acquire_poll_seconds: float
+    acquire_wait_seconds: float
+    floor_grace_minutes: float
 
 
 @dataclass(frozen=True)
@@ -250,6 +252,8 @@ class SystemConfig:
                     resources.get("kernel_start_margin_minutes", 5)
                 ),
                 acquire_poll_seconds=float(resources.get("acquire_poll_seconds", 2)),
+                acquire_wait_seconds=float(resources.get("acquire_wait_seconds", 5)),
+                floor_grace_minutes=float(resources.get("floor_grace_minutes", 15)),
             ),
             evaluation=EvaluationConfig(
                 fallback_after_minutes=float(
@@ -314,6 +318,10 @@ class SystemConfig:
             raise ValueError("resource runtime estimates must be positive")
         if self.resources.acquire_poll_seconds <= 0:
             raise ValueError("resources.acquire_poll_seconds must be positive")
+        if self.resources.acquire_wait_seconds <= 0:
+            raise ValueError("resources.acquire_wait_seconds must be positive")
+        if self.resources.floor_grace_minutes < 0:
+            raise ValueError("resources.floor_grace_minutes must be non-negative")
         if (
             self.evaluation.fallback_after_minutes <= 0
             or self.evaluation.fallback_turn_minutes <= 0

@@ -99,6 +99,11 @@ default_cpu_kernel_minutes = 10
 kernel_start_margin_minutes = 5
 acquire_poll_seconds = 2
 
+# 资源忙只短暂等待，随后返回 resource_deferred；它不占 Broker 提交槽，也不计入
+# 普通失败的三次重试上限。三题 floor 最多互等 15 分钟，避免缺席 Controller 锁死全局。
+acquire_wait_seconds = 5
+floor_grace_minutes = 15
+
 [evaluation]
 # HearSay evaluator 到此时仍未给出可验证契约，启动独立 fallback evaluator。
 fallback_after_minutes = 90

@@ -138,6 +138,18 @@ class KaggleAdapter:
         # 看见时，严格路径是 kernel，而不是错误地尝试 CSV。
         return "kernel"
 
+    def _runtime_minutes(self, record: dict) -> float:
+        accelerator = str(record.get("accelerator", "cpu")).lower()
+        default_minutes = (
+            self.default_cpu_kernel_minutes
+            if accelerator == "cpu" else self.default_gpu_kernel_minutes
+        )
+        # Agent 声明只能把预算调大，不能用过小估计绕过账号配额和截止门。
+        return max(
+            default_minutes,
+            float(record.get("estimated_kernel_minutes") or default_minutes),
+        )
+
     def submit(self, record: dict, submission_id: str, submission_class: str) -> SubmitResult:
         mode = record.get("submission_mode")
         if mode == "unknown":
@@ -205,15 +217,7 @@ class KaggleAdapter:
             return SubmitResult(False, "rejected", f"kernel package unreadable: {exc}")
 
         accelerator = str(record.get("accelerator", "cpu")).lower()
-        default_minutes = (
-            self.default_cpu_kernel_minutes
-            if accelerator == "cpu" else self.default_gpu_kernel_minutes
-        )
-        # Agent 声明只能把预算调大，不能用过小估计绕过账号配额和截止门。
-        runtime_minutes = max(
-            default_minutes,
-            float(record.get("estimated_kernel_minutes") or default_minutes),
-        )
+        runtime_minutes = self._runtime_minutes(record)
         latest_start = self.competition_deadline_epoch - (
             runtime_minutes + self.kernel_start_margin_minutes
         ) * 60
@@ -223,7 +227,7 @@ class KaggleAdapter:
                 "deadline_blocked",
                 f"not enough time for estimated {runtime_minutes:.1f} minute kernel",
             )
-        lease, reason = self.resource_gate.acquire(
+        lease, gate_status, reason = self.resource_gate.acquire(
             submission_id=submission_id,
             slug=self.slug,
             submission_class=submission_class,
@@ -232,14 +236,8 @@ class KaggleAdapter:
             deadline_epoch=latest_start,
         )
         if lease is None:
-            status = (
-                "resource_exhausted"
-                if "quota is exhausted" in reason else "deadline_blocked"
-                if time.time() >= latest_start else "retryable"
-            )
-            return SubmitResult(False, status, reason)
+            return SubmitResult(False, gate_status, reason)
         lease_id = str(lease["lease_id"])
-        run_started = time.time()
 
         try:
             kernel_ref = unique_kernel_id(
@@ -280,7 +278,12 @@ class KaggleAdapter:
                 kernel_ref=kernel_ref, kernel_version=version,
                 resource_lease_id=lease_id,
             )
-        self.resource_gate.settle(lease_id, time.time() - run_started)
+        # 优先采用 Kaggle 返回的运行时；无法解析时使用声明预算，而不是把
+        # 本地打包、push 和远端排队时间都记成 GPU 执行时间。
+        gpu_seconds = estimate_gpu_seconds(
+            log, fallback=runtime_minutes * 60
+        )
+        self.resource_gate.settle(lease_id, gpu_seconds)
         if status != "complete":
             retryable_mount = (
                 "filenotfounderror" in log.lower()
@@ -311,7 +314,9 @@ class KaggleAdapter:
         exact_version = version or lookup_current_version(kernel_ref)
         if exact_version is None:
             return SubmitResult(
-                False, "retryable", "completed kernel version could not be resolved",
+                False,
+                "kernel_complete_pending_output",
+                "completed kernel version could not be resolved",
                 kernel_ref=kernel_ref,
             )
         output_dir = self.root / "kernel_outputs" / submission_id
@@ -324,7 +329,7 @@ class KaggleAdapter:
             api.kernels_output(kernel_ref, str(output_dir), force=True, quiet=True)
         except Exception as exc:  # noqa: BLE001
             return SubmitResult(
-                False, "retryable",
+                False, "kernel_complete_pending_output",
                 f"kernel output download failed: {type(exc).__name__}: {exc}",
                 kernel_ref=kernel_ref, kernel_version=exact_version,
             )
@@ -368,9 +373,27 @@ class KaggleAdapter:
             )
 
     def reconcile_external(self, record: dict, row: dict) -> SubmitResult | None:
-        """Resume a kernel that outlived the original synchronous poll."""
+        """Resume a running kernel or the download/submit tail of a completed one."""
         result = row.get("result", {})
-        if result.get("status") != "external_running":
+        result_status = result.get("status")
+        if result_status == "kernel_complete_pending_output":
+            kernel_ref = str(result.get("kernel_ref", ""))
+            if not kernel_ref:
+                return SubmitResult(
+                    False, "execution_error", "completed kernel has no remote ref"
+                )
+            message = (
+                f"[fas:{row['submission_id']}] {row['submission_class']} "
+                f"{record['source_lane']} {record['candidate_id']}"
+            )[:140]
+            return self._finish_completed_kernel(
+                submission_id=row["submission_id"],
+                submission_class=row["submission_class"],
+                message=message,
+                kernel_ref=kernel_ref,
+                version=result.get("kernel_version"),
+            )
+        if result_status != "external_running":
             return None
         kernel_ref = str(result.get("kernel_ref", ""))
         if not kernel_ref:
@@ -380,12 +403,11 @@ class KaggleAdapter:
             return None
         lease_id = str(result.get("resource_lease_id", ""))
         if lease_id:
-            fallback = max(
-                float(record.get("estimated_kernel_minutes") or 0) * 60,
-                time.time() - float(row.get("reserved_at", time.time())),
-            )
             self.resource_gate.settle(
-                lease_id, estimate_gpu_seconds(raw, fallback=fallback)
+                lease_id,
+                estimate_gpu_seconds(
+                    raw, fallback=self._runtime_minutes(record) * 60
+                ),
             )
         if status != "complete":
             retryable_mount = (
@@ -420,10 +442,7 @@ class KaggleAdapter:
             status, raw = kernel_status_once(kernel_ref)
             if status not in {"complete", "error", "cancelled"}:
                 continue
-            fallback = max(
-                float(lease.get("estimated_seconds", 0.0)),
-                time.time() - float(lease.get("running_at", time.time())),
-            )
+            fallback = max(0.0, float(lease.get("estimated_seconds", 0.0)))
             self.resource_gate.settle(
                 str(lease["lease_id"]),
                 estimate_gpu_seconds(raw, fallback=fallback),

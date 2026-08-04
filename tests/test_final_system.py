@@ -120,6 +120,42 @@ def make_candidate(
     return candidate
 
 
+def make_kernel_candidate(
+    root: Path, *, name: str = "candidate", accelerator: str = "cpu",
+    estimated_kernel_minutes: float = 5,
+) -> Path:
+    candidate = root / name
+    kernel = candidate / "out" / "kernel"
+    kernel.mkdir(parents=True)
+    (candidate / "out" / "submission.csv").write_text(
+        "id,pred\na,0.1\nb,0.2\n", encoding="utf-8"
+    )
+    (candidate / "candidate.json").write_text(json.dumps({
+        "schema_version": 1,
+        "candidate_id": name,
+        "source_lane": "hearsay",
+        "submission_mode": "kernel",
+        "accelerator": accelerator,
+        "estimated_kernel_minutes": estimated_kernel_minutes,
+        "purpose": "resource declaration test",
+    }), encoding="utf-8")
+    (kernel / "solution.py").write_text("print('run')\n", encoding="utf-8")
+    (kernel / "kernel-metadata.json").write_text(json.dumps({
+        "code_file": "solution.py",
+        "kernel_type": "script",
+        "language": "python",
+        "enable_gpu": "true" if accelerator != "cpu" else "false",
+        "machine_shape": (
+            "NvidiaTeslaT4" if accelerator == "t4" else
+            "NvidiaTeslaP100" if accelerator == "p100" else ""
+        ),
+        "dataset_sources": [],
+        "kernel_sources": [],
+        "model_sources": [],
+    }), encoding="utf-8")
+    return candidate
+
+
 def test_config_is_formal_duration_agnostic() -> None:
     config = SystemConfig.load(ROOT / "configs/final_agent_system.toml", repo_root=ROOT)
     assert config.run.max_submissions == 50
@@ -136,6 +172,8 @@ def test_config_is_formal_duration_agnostic() -> None:
     assert config.resources.gpu_quota_hours == 30
     assert config.resources.gpu_concurrency == 2
     assert config.resources.cpu_concurrency == 5
+    assert config.resources.acquire_wait_seconds == 5
+    assert config.resources.floor_grace_minutes == 15
 
 
 def test_formal_live_controller_requires_shared_pool_and_floor_group(
@@ -703,6 +741,39 @@ def test_hearsay_external_broker_exposes_no_kaggle_or_gpu_tools(
     )
 
 
+def test_hearsay_registration_uses_declared_resource_class_and_runtime(
+    tmp_path: Path,
+) -> None:
+    assets = make_assets(tmp_path)
+    config = SystemConfig.load(
+        ROOT / "configs/final_agent_system.toml", repo_root=ROOT
+    )
+    config = replace(
+        config,
+        run=replace(config.run, workspace_root=tmp_path / "runs"),
+    )
+    controller = FinalController(
+        config=config, slug="slug", assets_dir=assets,
+        duration_minutes=10, competition_mode="practice",
+        kaggle_user="", live=False, run_id="resources",
+    )
+    solver = make_kernel_candidate(
+        controller.hearsay_ws, name="solver_a", accelerator="cpu",
+        estimated_kernel_minutes=4.5,
+    )
+    registry = CandidateRegistry(
+        tmp_path / "registry", assets=assets, evaluation=tmp_path / "evaluation"
+    )
+
+    assert controller._register_hearsay(registry, "kernel") == 0
+    assert controller._register_hearsay(registry, "kernel") == 1
+    record = registry.records()[0]
+    assert record["accelerator"] == "cpu"
+    assert record["estimated_kernel_minutes"] == 4.5
+    assert Path(record["snapshot_path"], "candidate.json").is_file()
+    assert solver.is_dir()
+
+
 def test_live_adapter_reads_structured_remaining_quota(
     tmp_path: Path, monkeypatch,
 ) -> None:
@@ -796,6 +867,79 @@ def test_kernel_adapter_validates_downloaded_output_before_submission(
     assert pushed["dataset_sources"] == source_metadata["dataset_sources"]
     assert pushed["kernel_sources"] == source_metadata["kernel_sources"]
     assert pushed["model_sources"] == source_metadata["model_sources"]
+
+
+def test_completed_kernel_download_retry_resumes_tail_without_rerun(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    assets = make_assets(tmp_path)
+    candidate = make_kernel_candidate(
+        tmp_path, accelerator="p100", estimated_kernel_minutes=1,
+    )
+    gate = DayResourceGate(
+        tmp_path / "resource", pool_id="event", floor_group_id="day-1",
+        expected_slugs=("slug",), gpu_limit_hours=30,
+        gpu_concurrency=2, cpu_concurrency=5, poll_seconds=0.01,
+    )
+    adapter = KaggleAdapter(
+        slug="slug", root=tmp_path / "control", kaggle_user="user",
+        submission_mode="kernel", assets=assets, resource_gate=gate,
+        competition_deadline_epoch=time.time() + 3600,
+        default_gpu_kernel_minutes=1,
+    )
+    pushes: list[Path] = []
+
+    def fake_push(path):
+        pushes.append(Path(path))
+        return True, 7, "ok"
+
+    monkeypatch.setattr("final_system.kaggle.push_kernel", fake_push)
+    monkeypatch.setattr(
+        "final_system.kaggle.poll_kernel",
+        lambda _ref, timeout_s: ("complete", "runtime: 12"),
+    )
+    from kaggle.api.kaggle_api_extended import KaggleApi
+
+    monkeypatch.setattr(KaggleApi, "authenticate", lambda self: None)
+    downloads = 0
+
+    def fake_output(self, kernel_ref, path, **kwargs):
+        nonlocal downloads
+        del self, kernel_ref, kwargs
+        downloads += 1
+        if downloads == 1:
+            raise ConnectionError("temporary download failure")
+        Path(path, "submission.csv").write_text(
+            "id,pred\na,0.1\nb,0.2\n", encoding="utf-8"
+        )
+
+    monkeypatch.setattr(KaggleApi, "kernels_output", fake_output)
+    monkeypatch.setattr(
+        KaggleApi, "competition_submit_code",
+        lambda self, *args, **kwargs: SimpleNamespace(ref="submission-ref"),
+    )
+    record = {
+        "candidate_id": "candidate", "source_lane": "codex",
+        "snapshot_path": str(candidate), "submission_mode": "kernel",
+        "accelerator": "p100", "estimated_kernel_minutes": 1,
+    }
+    first = adapter.submit(record, "sub-1", "floor")
+    assert first.status == "kernel_complete_pending_output"
+    assert first.kernel_ref and first.kernel_version == 7
+    assert gate.status()["gpu_hours_used"] == pytest.approx(12 / 3600, abs=1e-4)
+
+    resumed = adapter.reconcile_external(
+        record,
+        {
+            "submission_id": "sub-1", "submission_class": "floor",
+            "reserved_at": time.time(), "result": first.to_dict(),
+        },
+    )
+    assert resumed and resumed.consumed is True
+    assert resumed.status == "submitted"
+    assert len(pushes) == 1
+    assert downloads == 2
+    assert gate.status()["floors"] == {"slug": True}
 
 
 def test_kernel_adapter_refuses_to_start_after_its_runtime_deadline(
@@ -977,6 +1121,51 @@ def test_known_non_consuming_failure_retries_without_spending_extra_slot(
     assert broker.remaining() == 2
 
 
+def test_resource_deferral_does_not_exhaust_normal_retry_budget(
+    tmp_path: Path,
+) -> None:
+    assets = make_assets(tmp_path)
+    evaluation = make_evaluation(tmp_path)
+    registry = CandidateRegistry(
+        tmp_path / "registry", assets=assets, evaluation=evaluation
+    )
+    registry.register(
+        make_candidate(
+            tmp_path, lane="codex", candidate_id="wait-for-resource",
+            predictions=[0, 1, 0, 1], csv_values=("0.1", "0.2"),
+        ),
+        source_lane="codex",
+    )
+
+    class BusyThenFreeAdapter(DryRunAdapter):
+        def __init__(self) -> None:
+            super().__init__("slug", tmp_path)
+            self.calls = 0
+
+        def submit(self, record, submission_id, submission_class):
+            self.calls += 1
+            if self.calls <= 5:
+                return SubmitResult(False, "resource_deferred", "gpu busy")
+            return super().submit(record, submission_id, submission_class)
+
+    adapter = BusyThenFreeAdapter()
+    broker = SubmissionBroker(
+        tmp_path / "control", registry=registry, adapter=adapter,
+        max_submissions=2, final_reserve=0, initial_calibrations=1,
+        final_start_fraction=0.8, anti_monopoly_fraction=0.5,
+        min_local_gain=0.0, direction="maximize",
+        max_retryable_attempts=3, retry_backoff_seconds=0,
+    )
+    attempts = [broker.tick(fraction_elapsed=0.1) for _ in range(6)]
+    assert all(row is not None for row in attempts)
+    assert [row["result"]["status"] for row in attempts[:5]] == [
+        "resource_deferred"
+    ] * 5
+    assert attempts[-1]["result"]["consumed"] is True
+    assert adapter.calls == 6
+    assert broker.remaining() == 1
+
+
 def test_external_kernel_is_reconciled_instead_of_holding_slot_forever(
     tmp_path: Path,
 ) -> None:
@@ -1026,6 +1215,170 @@ def test_external_kernel_is_reconciled_instead_of_holding_slot_forever(
     assert broker.remaining() == 1
 
 
+def test_broker_reconciles_completed_kernel_tail_in_place(tmp_path: Path) -> None:
+    assets = make_assets(tmp_path)
+    evaluation = make_evaluation(tmp_path)
+    registry = CandidateRegistry(
+        tmp_path / "registry", assets=assets, evaluation=evaluation
+    )
+    registry.register(
+        make_candidate(
+            tmp_path, lane="codex", candidate_id="remote-complete",
+            predictions=[0, 1, 0, 1], csv_values=("0.1", "0.2"),
+        ),
+        source_lane="codex",
+    )
+
+    class TailAdapter(DryRunAdapter):
+        def __init__(self) -> None:
+            super().__init__("slug", tmp_path)
+            self.submit_calls = 0
+            self.resume_calls = 0
+
+        def submit(self, record, submission_id, submission_class):
+            self.submit_calls += 1
+            return SubmitResult(
+                False, "kernel_complete_pending_output", "download failed",
+                kernel_ref="user/kernel", kernel_version=3,
+            )
+
+        def reconcile_external(self, record, row):
+            self.resume_calls += 1
+            return SubmitResult(
+                True, "submitted", "tail resumed",
+                kernel_ref="user/kernel", kernel_version=3,
+            )
+
+        def submission_states(self):
+            return {}
+
+    adapter = TailAdapter()
+    broker = SubmissionBroker(
+        tmp_path / "control", registry=registry, adapter=adapter,
+        max_submissions=2, final_reserve=0, initial_calibrations=1,
+        final_start_fraction=0.8, anti_monopoly_fraction=0.5,
+        min_local_gain=0.0, direction="maximize",
+        retry_backoff_seconds=0,
+    )
+    pending = broker.tick(fraction_elapsed=0.1)
+    assert pending and pending["result"]["status"] == "kernel_complete_pending_output"
+    assert broker.reservable() == 1
+    assert broker.refresh_scores() == 1
+    assert adapter.submit_calls == 1
+    assert adapter.resume_calls == 1
+    assert broker.consumed()[0]["result"]["status"] == "submitted"
+
+
+def test_resource_gate_defers_quickly_and_allows_retry_after_capacity_frees(
+    tmp_path: Path,
+) -> None:
+    gate = DayResourceGate(
+        tmp_path / "pool", pool_id="event", floor_group_id="day-1",
+        expected_slugs=("task-a", "task-b", "task-c"),
+        gpu_limit_hours=30, gpu_concurrency=2, cpu_concurrency=5,
+        poll_seconds=0.005, acquire_wait_seconds=0.03,
+    )
+    for slug in ("task-a", "task-b", "task-c"):
+        gate.mark_floor(slug)
+    first, first_status, _ = gate.acquire(
+        submission_id="one", slug="task-a", submission_class="milestone",
+        accelerator="p100", estimated_seconds=60,
+        deadline_epoch=time.time() + 10,
+    )
+    second, second_status, _ = gate.acquire(
+        submission_id="two", slug="task-b", submission_class="milestone",
+        accelerator="p100", estimated_seconds=60,
+        deadline_epoch=time.time() + 10,
+    )
+    started = time.time()
+    deferred, status, detail = gate.acquire(
+        submission_id="three", slug="task-c", submission_class="milestone",
+        accelerator="p100", estimated_seconds=60,
+        deadline_epoch=time.time() + 10,
+    )
+    assert first and second
+    assert first_status == second_status == "acquired"
+    assert deferred is None and status == "resource_deferred"
+    assert "concurrency" in detail
+    assert time.time() - started < 0.2
+    assert gate.status()["waiters"] == 0
+
+    gate.settle(first["lease_id"], 30)
+    retried, status, _ = gate.acquire(
+        submission_id="three-retry", slug="task-c",
+        submission_class="milestone", accelerator="p100",
+        estimated_seconds=60, deadline_epoch=time.time() + 10,
+    )
+    assert retried is not None and status == "acquired"
+    gate.settle(second["lease_id"], 20)
+    gate.settle(retried["lease_id"], 10)
+
+
+def test_active_gpu_reservation_defers_instead_of_exhausting_candidate(
+    tmp_path: Path,
+) -> None:
+    gate = DayResourceGate(
+        tmp_path / "pool", pool_id="event", floor_group_id="day-1",
+        expected_slugs=("task",), gpu_limit_hours=2, gpu_concurrency=2,
+        cpu_concurrency=5, poll_seconds=0.005, acquire_wait_seconds=0.01,
+    )
+    gate.mark_floor("task")
+    active, _, _ = gate.acquire(
+        submission_id="active", slug="task", submission_class="milestone",
+        accelerator="p100", estimated_seconds=5400,
+        deadline_epoch=time.time() + 10,
+    )
+    deferred, status, detail = gate.acquire(
+        submission_id="waiting", slug="task", submission_class="milestone",
+        accelerator="p100", estimated_seconds=3600,
+        deadline_epoch=time.time() + 10,
+    )
+    assert active is not None
+    assert deferred is None and status == "resource_deferred"
+    assert "temporarily reserved" in detail
+    gate.settle(active["lease_id"], 1800)
+    admitted, status, _ = gate.acquire(
+        submission_id="waiting-retry", slug="task",
+        submission_class="milestone", accelerator="p100",
+        estimated_seconds=3600, deadline_epoch=time.time() + 10,
+    )
+    assert admitted is not None and status == "acquired"
+    gate.release(admitted["lease_id"])
+
+
+def test_floor_gate_opens_after_grace_when_one_controller_is_missing(
+    tmp_path: Path,
+) -> None:
+    gate = DayResourceGate(
+        tmp_path / "pool", pool_id="event", floor_group_id="day-1",
+        expected_slugs=("task-a", "task-b", "task-c"),
+        gpu_limit_hours=30, gpu_concurrency=2, cpu_concurrency=5,
+        poll_seconds=0.005, acquire_wait_seconds=0.01,
+        floor_grace_seconds=0.04,
+    )
+    gate.mark_floor("task-a")
+    gate.mark_floor("task-b")
+    blocked, status, detail = gate.acquire(
+        submission_id="early", slug="task-a", submission_class="milestone",
+        accelerator="cpu", estimated_seconds=1,
+        deadline_epoch=time.time() + 10,
+    )
+    assert blocked is None and status == "resource_deferred"
+    assert "task-c" in detail
+    time.sleep(0.05)
+    lease, status, _ = gate.acquire(
+        submission_id="after-grace", slug="task-a",
+        submission_class="milestone", accelerator="cpu",
+        estimated_seconds=1, deadline_epoch=time.time() + 10,
+    )
+    assert lease is not None and status == "acquired"
+    floor_gate = gate.status()["floor_gate"]
+    assert floor_gate["open"] is True
+    assert floor_gate["grace_expired"] is True
+    assert floor_gate["missing_slugs"] == ["task-c"]
+    gate.release(lease["lease_id"])
+
+
 def test_day_resource_gate_is_shared_across_three_controllers(
     tmp_path: Path,
 ) -> None:
@@ -1040,36 +1393,38 @@ def test_day_resource_gate_is_shared_across_three_controllers(
     }
     gate_a = DayResourceGate(tmp_path / "pool", **kwargs)
     gate_b = DayResourceGate(tmp_path / "pool", **kwargs)
-    blocked, reason = gate_a.acquire(
+    blocked, status, reason = gate_a.acquire(
         submission_id="too-early", slug="task-a", submission_class="milestone",
         accelerator="p100", estimated_seconds=60,
         deadline_epoch=time.time() + 0.04,
     )
     assert blocked is None
+    assert status == "deadline_blocked"
     assert "floor" in reason
     for slug in kwargs["expected_slugs"]:
         gate_a.mark_floor(slug)
-    first, _ = gate_a.acquire(
+    first, _, _ = gate_a.acquire(
         submission_id="one", slug="task-a", submission_class="milestone",
         accelerator="p100", estimated_seconds=60,
         deadline_epoch=time.time() + 1,
     )
-    second, _ = gate_b.acquire(
+    second, _, _ = gate_b.acquire(
         submission_id="two", slug="task-b", submission_class="milestone",
         accelerator="t4", estimated_seconds=60,
         deadline_epoch=time.time() + 1,
     )
-    third, third_reason = gate_a.acquire(
+    third, third_status, third_reason = gate_a.acquire(
         submission_id="three", slug="task-c", submission_class="milestone",
         accelerator="p100", estimated_seconds=60,
         deadline_epoch=time.time() + 0.04,
     )
     assert first and second
     assert third is None
+    assert third_status == "deadline_blocked"
     assert "concurrency" in third_reason
     assert gate_b.status()["gpu_inflight"] == 2
     gate_a.settle(first["lease_id"], 30)
-    third, _ = gate_b.acquire(
+    third, _, _ = gate_b.acquire(
         submission_id="three-retry", slug="task-c", submission_class="milestone",
         accelerator="p100", estimated_seconds=60,
         deadline_epoch=time.time() + 1,
@@ -1091,7 +1446,7 @@ def test_account_resource_pool_carries_gpu_usage_into_second_day(
         tmp_path / "pool", floor_group_id="day1",
         expected_slugs=("a", "b", "c"), **common,
     )
-    lease, _ = day1.acquire(
+    lease, _, _ = day1.acquire(
         submission_id="floor-a", slug="a", submission_class="floor",
         accelerator="p100", estimated_seconds=3600,
         deadline_epoch=time.time() + 1,
@@ -1106,7 +1461,7 @@ def test_account_resource_pool_carries_gpu_usage_into_second_day(
     assert status["gpu_hours_used"] == 1.0
     assert status["floors"] == {"d": False, "e": False, "f": False}
     assert set(status["floor_groups"]) == {"day1", "day2"}
-    orphan, _ = day2.acquire(
+    orphan, _, _ = day2.acquire(
         submission_id="orphan", slug="d", submission_class="floor",
         accelerator="p100", estimated_seconds=60,
         deadline_epoch=time.time() + 1,

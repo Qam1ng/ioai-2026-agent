@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import os
 import re
 import signal
@@ -464,6 +465,38 @@ class FinalController:
                     )
         return count
 
+    @staticmethod
+    def _hearsay_resources(solver: Path, submission_mode: str) -> dict[str, Any]:
+        if submission_mode == "csv":
+            return {"accelerator": "cpu"}
+        declaration: dict[str, Any] = {}
+        declaration_path = solver / "candidate.json"
+        if declaration_path.is_file():
+            value = json.loads(declaration_path.read_text(encoding="utf-8"))
+            if not isinstance(value, dict):
+                raise ValueError("HearSay candidate.json must be an object")
+            for key in ("accelerator", "estimated_kernel_minutes"):
+                if key in value:
+                    declaration[key] = value[key]
+
+        if "accelerator" not in declaration:
+            metadata_path = solver / "out" / "kernel" / "kernel-metadata.json"
+            metadata = (
+                json.loads(metadata_path.read_text(encoding="utf-8"))
+                if metadata_path.is_file() else {}
+            )
+            if not isinstance(metadata, dict):
+                raise ValueError("HearSay kernel-metadata.json must be an object")
+            enabled = metadata.get("enable_gpu") is True or str(
+                metadata.get("enable_gpu", "")
+            ).lower() == "true"
+            shape = str(metadata.get("machine_shape", ""))
+            declaration["accelerator"] = (
+                "t4" if enabled and shape == "NvidiaTeslaT4"
+                else "p100" if enabled else "cpu"
+            )
+        return declaration
+
     def _register_hearsay(
         self, registry: CandidateRegistry, submission_mode: str
     ) -> int:
@@ -480,15 +513,16 @@ class FinalController:
             self._stable[str(solver)] = (fingerprint, stable_count)
             if stable_count < 2:
                 continue
-            manifest = {
-                "schema_version": 1,
-                "candidate_id": f"{solver.name}-{fingerprint[:10]}",
-                "source_lane": "hearsay",
-                "submission_mode": submission_mode,
-                "accelerator": "p100",
-                "purpose": f"stable HearSay snapshot from {solver.name}",
-            }
             try:
+                resources = self._hearsay_resources(solver, submission_mode)
+                manifest = {
+                    "schema_version": 1,
+                    "candidate_id": f"{solver.name}-{fingerprint[:10]}",
+                    "source_lane": "hearsay",
+                    "submission_mode": submission_mode,
+                    **resources,
+                    "purpose": f"stable HearSay snapshot from {solver.name}",
+                }
                 before = len(registry.records())
                 record = registry.register(
                     solver, source_lane="hearsay", manifest=manifest
@@ -750,6 +784,8 @@ class FinalController:
                 gpu_concurrency=resources.gpu_concurrency,
                 cpu_concurrency=resources.cpu_concurrency,
                 poll_seconds=resources.acquire_poll_seconds,
+                acquire_wait_seconds=resources.acquire_wait_seconds,
+                floor_grace_seconds=resources.floor_grace_minutes * 60,
             )
             adapter: Any = KaggleAdapter(
                 slug=self.slug, root=self.control, kaggle_user=self.kaggle_user,

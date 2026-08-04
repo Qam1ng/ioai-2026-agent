@@ -75,10 +75,15 @@ Public-LB 校准、额度状态机和 Kaggle 提交均为确定性脚本。Selec
 - Kernel 候选必须是 Kaggle 真正会上传的独立单文件；额外 helper 会在本地拒绝，
   metadata 的 dataset/kernel/model sources 会原样保留。远端完成后，Broker 下载并按
   官方 submission 模板校验真实 `submission.csv`，再提交精确 kernel version。
-- 每题可有两个 Broker 后台调用，但三个进程共用账号级资源锁。三题先各拿到一个
-  floor，之后才放行 milestone；两天所有 GPU lease 合计不超过 2 并发/30 小时，CPU 不
-  超过 5 并发。候选的时长声明只能增加、不能低于保守默认值；来不及在截止前完成的
-  Kernel 不启动。远端超出本地轮询窗口时保留 lease，并持续对账直至恢复或终态。
+- 每题可有两个 Broker 后台调用，但三个进程共用账号级资源锁。资源忙时单次最多等待
+  5 秒，随后记为 `resource_deferred` 并释放 Broker 预留；它不消耗提交额度，也不计入
+  普通瞬时失败的三次重试上限。三题 floor 全部成功后立即放行非 floor；若某个
+  Controller 缺席，15 分钟软门到期后也会放行，并在资源状态中保留缺失 slug。
+- 两天所有 GPU lease 合计不超过 2 并发/30 小时，CPU 不超过 5 并发。HearSay 与两条
+  直跑线都声明 `accelerator` 和预计 Kernel 时间；纯 CPU 候选不再固定抢 P100。候选的
+  时长声明只能增加、不能低于保守默认值；来不及在截止前完成的 Kernel 不启动。
+  GPU 账目优先采用远端可解析运行时，否则用声明预算，不把打包、push 和 Kaggle 排队
+  墙钟全部算成 GPU 时间。远端超出本地轮询窗口时保留 lease，并持续对账至终态。
 
 ## 50 次提交策略
 
@@ -185,12 +190,14 @@ candidate/submission ID、用途与 parent、完整 E0 mean/std/pooled/per-fold�
 结束，因此不会被重新唤醒；跨路线完整历史只进入 Selection Manager，不互相污染
 三条独立探索线。
 
-Broker 会在外部调用前先写 `reserved`；已确认未消费额度的 push/mount 瞬时失败最多
-退避重试 3 次；格式、运行和截止错误不重试。提交 API 结果不确定时保留为
+Broker 会在外部调用前先写 `reserved`；资源暂不可用会快速转成不占槽的
+`resource_deferred`，已确认未消费额度的 push/mount 瞬时失败最多退避重试 3 次；
+格式、运行和截止错误不重试。提交 API 结果不确定时保留为
 `ambiguous`，按 `[fas:<submission_id>]` 在 Kaggle submissions 自动对账，确认存在
 后才计为已消费。仍在 Kaggle 运行的 Kernel 记为 `external_running`，不会重复 push，
-终态后继续下载产物并提交原精确版本；即使原 controller 崩溃，其他两题也会释放其
-已终止的共享资源 lease。
+已经完成但暂时无法下载产物的 Kernel 记为 `kernel_complete_pending_output`；两者都
+沿用原 kernel ref/version 恢复，绝不重新训练。即使原 controller 崩溃，其他两题也会
+释放其已终止的共享资源 lease。
 这里的持久化首先是审计和防重复保障；当前 CLI 不提供对整个既有 session 的原地
 自动恢复，不能把“状态文件还在”理解为可以无检查地重跑同一个 `--run-id`。
 

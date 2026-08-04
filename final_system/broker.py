@@ -113,6 +113,7 @@ class SubmissionBroker:
     def _reserved(row: dict) -> bool:
         return row.get("result", {}).get("status") in {
             "reserved", "ambiguous", "external_running",
+            "kernel_complete_pending_output",
         }
 
     def committed(self) -> list[dict]:
@@ -140,6 +141,15 @@ class SubmissionBroker:
             "remaining": self.remaining(),
             "inflight_or_ambiguous": sum(
                 self._reserved(row) for row in self.submissions()
+            ),
+            "resource_deferred_events": sum(
+                row.get("result", {}).get("status") == "resource_deferred"
+                for row in self.submissions()
+            ),
+            "kernel_tail_pending": sum(
+                row.get("result", {}).get("status")
+                == "kernel_complete_pending_output"
+                for row in self.submissions()
             ),
             "reservable": self.reservable(),
             "final_reserve": self.final_reserve,
@@ -269,9 +279,14 @@ class SubmissionBroker:
                 status = result.get("status")
                 if self._consumed(row) or status in {
                     "reserved", "ambiguous", "external_running", "rejected",
-                    "execution_error", "resource_exhausted", "deadline_blocked",
+                    "kernel_complete_pending_output", "execution_error",
+                    "resource_exhausted", "deadline_blocked",
                 }:
                     return True
+                if status == "resource_deferred":
+                    if float(result.get("retry_after", 0)) > now:
+                        return True
+                    continue
                 if status == "retryable":
                     retryable += 1
                     if float(result.get("retry_after", 0)) > now:
@@ -556,7 +571,9 @@ class SubmissionBroker:
             and not result_value.get("consumed")
         ):
             result_value["status"] = "retryable"
-        if result_value.get("status") == "retryable":
+        if result_value.get("status") in {
+            "retryable", "resource_deferred", "kernel_complete_pending_output",
+        }:
             result_value.setdefault(
                 "retry_after", time.time() + self.retry_backoff_seconds
             )
@@ -583,7 +600,11 @@ class SubmissionBroker:
         if callable(reconcile_method):
             pending = [
                 row for row in self.submissions()
-                if row.get("result", {}).get("status") == "external_running"
+                if row.get("result", {}).get("status") in {
+                    "external_running", "kernel_complete_pending_output",
+                }
+                and float(row.get("result", {}).get("retry_after", 0))
+                <= time.time()
             ]
             for stale in pending:
                 record = self.registry.get(stale["candidate_id"])
@@ -597,7 +618,9 @@ class SubmissionBroker:
                 if reconciled is None:
                     continue
                 result_value = reconciled.to_dict()
-                if result_value.get("status") == "retryable":
+                if result_value.get("status") in {
+                    "retryable", "kernel_complete_pending_output",
+                }:
                     result_value.setdefault(
                         "retry_after", time.time() + self.retry_backoff_seconds
                     )
@@ -608,7 +631,7 @@ class SubmissionBroker:
                         if (
                             row["submission_id"] == stale["submission_id"]
                             and row.get("result", {}).get("status")
-                            == "external_running"
+                            == stale.get("result", {}).get("status")
                         ):
                             row["result"] = result_value
                             row["completed_at"] = time.time()
