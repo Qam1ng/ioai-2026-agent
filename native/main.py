@@ -1663,7 +1663,8 @@ def bootstrap(ws: Path, args, budget: Budget, trace: Tracer) -> None:
     try:
         overview = R.kaggle_overview({}, ctx)
         (ws / "TASK.md").write_text(overview)
-        print(f"[boot] task statement -> TASK.md ({len(overview)} chars)", flush=True)
+        print(f"[boot] {whoami()}", flush=True)
+    print(f"[boot] task statement -> TASK.md ({len(overview)} chars)", flush=True)
         if overview.startswith("!! WARNING"):
             facts.board().post(
                 "data", "The Kaggle description/evaluation pages are Kaggle's "
@@ -1791,6 +1792,27 @@ def finalize(ws: Path, args, budget: Budget, trace: Tracer) -> None:
         print(f"[cleanup] killed {n} detached process(es) still running out of "
               f"the workspace", flush=True)
         trace.log("reaped", n=n)
+
+
+def whoami() -> str:
+    """Which credential and which model are actually in play.
+
+    Neither is a launch flag you can read off the command line: auth comes from
+    ANTHROPIC_API_KEY if it is set and from ~/.claude/.credentials.json if it is
+    not, and ANTHROPIC_MODEL in the environment sits behind --model without
+    saying so. A run that quietly used a different model or a different account
+    than intended is not something to discover afterwards from a bill.
+    """
+    key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if key:
+        who = f"ANTHROPIC_API_KEY (...{key[-4:]}) — API billing"
+    elif Path.home().joinpath(".claude/.credentials.json").exists():
+        who = "OAuth subscription (~/.claude/.credentials.json)"
+    else:
+        who = "!! no credential found — every agent will fail"
+    env_model = os.environ.get("ANTHROPIC_MODEL", "").strip()
+    shadow = f", env ANTHROPIC_MODEL={env_model} is being overridden" if env_model else ""
+    return f"auth: {who}{shadow}"
 
 
 def claim_slug(ws: Path, slug: str) -> None:
