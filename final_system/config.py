@@ -74,12 +74,28 @@ class HearSayConfig:
 
 
 @dataclass(frozen=True)
+class SelectionConfig:
+    enabled: bool
+    model: str
+    effort: str
+    interval_seconds: float
+    timeout_seconds: float
+    recommendation_ttl_seconds: float
+    fallback_seconds: float
+    calibration_min_feedback: int
+    calibration_ridge_strength: float
+    calibration_min_rank_gain: float
+    calibration_max_blend_weight: float
+
+
+@dataclass(frozen=True)
 class SystemConfig:
     run: RunConfig
     search: SearchConfig
     claude: ClaudeConfig
     codex: CodexConfig
     hearsay: HearSayConfig
+    selection: SelectionConfig
 
     @classmethod
     def load(cls, path: Path, *, repo_root: Path) -> "SystemConfig":
@@ -90,6 +106,7 @@ class SystemConfig:
         claude = _section(raw, "claude")
         codex = _section(raw, "codex")
         hearsay = _section(raw, "hearsay")
+        selection = _section(raw, "selection")
 
         workspace = Path(run.get("workspace_root", "workspace/final_system"))
         if not workspace.is_absolute():
@@ -164,6 +181,29 @@ class SystemConfig:
                 rounds=int(hearsay.get("rounds", 40)),
                 max_turns=int(hearsay.get("max_turns", 250)),
             ),
+            selection=SelectionConfig(
+                enabled=bool(selection.get("enabled", True)),
+                model=str(selection.get("model", "claude-fable-5")),
+                effort=str(selection.get("effort", "high")),
+                interval_seconds=float(selection.get("interval_seconds", 90)),
+                timeout_seconds=float(selection.get("timeout_seconds", 180)),
+                recommendation_ttl_seconds=float(
+                    selection.get("recommendation_ttl_seconds", 300)
+                ),
+                fallback_seconds=float(selection.get("fallback_seconds", 240)),
+                calibration_min_feedback=int(
+                    selection.get("calibration_min_feedback", 4)
+                ),
+                calibration_ridge_strength=float(
+                    selection.get("calibration_ridge_strength", 10.0)
+                ),
+                calibration_min_rank_gain=float(
+                    selection.get("calibration_min_rank_gain", 0.05)
+                ),
+                calibration_max_blend_weight=float(
+                    selection.get("calibration_max_blend_weight", 0.50)
+                ),
+            ),
         )
         value.validate()
         return value
@@ -189,3 +229,17 @@ class SystemConfig:
             raise ValueError("search.research_backends must contain R1..R4")
         if self.hearsay.solvers not in range(1, 9):
             raise ValueError("hearsay.solvers must be in 1..8")
+        if self.selection.interval_seconds <= 0 or self.selection.timeout_seconds <= 0:
+            raise ValueError("selection interval/timeout must be positive")
+        if self.selection.recommendation_ttl_seconds <= 0:
+            raise ValueError("selection recommendation TTL must be positive")
+        if self.selection.fallback_seconds < self.selection.timeout_seconds:
+            raise ValueError("selection fallback_seconds must cover timeout_seconds")
+        if self.selection.calibration_min_feedback < 4:
+            raise ValueError("calibration_min_feedback must be at least 4")
+        if self.selection.calibration_ridge_strength < 0:
+            raise ValueError("calibration ridge strength must be non-negative")
+        if not 0 <= self.selection.calibration_min_rank_gain <= 2:
+            raise ValueError("calibration rank gain must be in 0..2")
+        if not 0 <= self.selection.calibration_max_blend_weight <= 0.5:
+            raise ValueError("calibration blend weight must be in 0..0.5")

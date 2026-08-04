@@ -59,12 +59,16 @@ class _ProcessRunner:
 class ClaudeSubscriptionRunner(_ProcessRunner):
     """Claude Code using a selected Max-account profile, with an isolated HOME."""
 
-    def __init__(self, *, binary: Path, model: str, effort: str, profile_dir: Path):
+    def __init__(
+        self, *, binary: Path, model: str, effort: str, profile_dir: Path,
+        allowed_tools: str = "Bash,Read,Edit,Write,Glob,Grep,WebSearch,WebFetch",
+    ):
         super().__init__()
         self.binary = Path(binary)
         self.model = model
         self.effort = effort
         self.profile_dir = Path(profile_dir)
+        self.allowed_tools = allowed_tools
 
     def argv(self, *, resume_session_id: str | None, persist_session: bool) -> list[str]:
         command = [
@@ -72,7 +76,7 @@ class ClaudeSubscriptionRunner(_ProcessRunner):
             "--effort", self.effort,
             "--output-format", "stream-json", "--verbose",
             "--permission-mode", "bypassPermissions",
-            "--allowedTools", "Bash,Read,Edit,Write,Glob,Grep,WebSearch,WebFetch",
+            "--allowedTools", self.allowed_tools,
             "--prompt-suggestions", "false",
         ]
         if resume_session_id:

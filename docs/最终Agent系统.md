@@ -3,8 +3,8 @@
 ## 结论
 
 系统保留三条故障模式不同的路线，并只在三个机械接口汇合：只读官方资产、公共
-验证合同、Submission Broker。Search 的知识不会进入两条直跑线，排行榜反馈也只
-返回产生该候选的路线。
+验证合同、Submission Broker。Search 的知识不会进入两条直跑线；每条解题路线只
+收到自己候选的完整反馈，而 Selection Manager 读取全局候选与提交历史。
 
 ```text
                          官方资产（只读 + SHA-256）
@@ -21,15 +21,22 @@
                                   │
                  公共 metric.py + folds.json 重评分
                                   │
-                    唯一 Submission Broker（脚本）
-                  floor / calibration / milestone / final
-                                  │
-                               Kaggle
+                 Public-LB 校准器（版本化脚本）◄─────┐
+                 E0 冻结；留一排序改善才激活          │
+                                  │                   │
+              Selection Manager（Claude Code Agent） │
+                    Fable 5 / high，只给建议          │
+                                  │ candidate / wait  │
+                    唯一 Submission Broker（脚本）    │
+              校验建议 + 额度策略 + 超时确定性兜底    │
+                                  │                   │
+                               Kaggle ────────────────┘
 ```
 
 模块类型：Search Analyst/Research、HearSay evaluator/solver、Codex 和 Claude 直跑
-都是 Agent；资产快照、哈希校验、候选快照、公共重评分、额度状态机和 Kaggle 提交
-均为确定性脚本。
+以及 Selection Manager 都是 Agent；资产快照、哈希校验、候选快照、公共重评分、
+Public-LB 校准、额度状态机和 Kaggle 提交均为确定性脚本。Selection Manager 没有
+提交权；它的 Claude Code 进程只开放 `Read`，且进程环境不含 Kaggle 凭证。
 
 ## 关键边界
 
@@ -42,6 +49,14 @@
   凭证；只有 controller/Broker 保留 operator 环境。
 - `claimed_local_score` 永不参与选择。Broker 只读取 `out/oof.npy`，用第一次冻结的
   `metric.py + folds.json` 重算分数，并把 contract SHA-256 写入证据。
+- Public-LB 校准层不会修改 E0。至少积累 4 个可配对分数后，它以
+  `mean/std/pooled/per-fold` 拟合带正则的校准器；只有留一预测的 Spearman 排序比
+  原始 E0 至少改善配置门槛时才激活，而且校准权重上限为 0.5。未通过门禁时排序
+  完全退回 E0；通过后只调整排序与 milestone 判断，原始 E0 证据永久保留。
+- Selection Manager 只会看到 Broker 已按额度、阶段、格式和反垄断规则过滤后的
+  候选。它输出带输入 SHA-256 和过期时间的 `submit/wait` 建议；Broker 再次校验候选
+  是否仍然 eligible。模型不匹配、超时、非法 JSON、陈旧输入或无建议超过等待窗口
+  时，Broker 使用同一 policy 集合中的确定性最高项，不让 Agent 直接调用 Kaggle。
 - 候选以内容指纹做不可变快照。同一 submission 哈希只注册一次；Agent 在 READY
   之后改文件会形成新候选，不会偷偷改变已经测过/提交过的候选。
 - Kernel push/poll 在最多两个后台槽中运行，不会阻塞新候选收集、公共重评分或反馈
@@ -55,6 +70,10 @@
   路线已有合格候选，单一来源不得占 milestone 的 50% 以上。
 - 8 次 `final/recovery` 保留到末段。未使用额度不是必须花完；没有新的不可重复候选
   时，Broker 不会为了凑数重复提交。
+
+这些规则先由脚本生成 policy-eligible 集合，Selection Manager 只在该集合内排序或
+建议等待。最终“交哪个”的职责分为两层：Agent 做证据判断，Broker 做权限校验、
+额度原子预留和真实提交。即使 Agent 故障，Broker 也会在配置的等待窗口后回退。
 
 `source_lane`（hearsay/codex/claude）与 `submission_class`
 （floor/calibration/milestone/final）分开记录，避免把来源和提交目的混为一谈。
@@ -108,15 +127,30 @@ python -m final_system run \
 search/*/trajectories/                  Search 全部 Agent JSONL
 control/trajectories/codex/             Codex 每轮 JSONL
 control/trajectories/claude/            Claude 每轮 JSONL
+control/trajectories/selection_manager/  Selection Manager 每次 Claude Code JSONL
 control/hearsay.stdout.log              HearSay 总日志
 lanes/hearsay/trace.jsonl               HearSay harness 轨迹
 lanes/hearsay/facts.jsonl               HearSay 事实板
 control/candidates/snapshots/            所有不可变候选
+control/calibration/latest.json          当前版本化 Public-LB 校准状态
+control/calibration/history/              每个校准版本的不可变记录
+control/selection_manager/inputs/         Manager 每次完整输入
+control/selection_manager/history/        SHA 绑定的有效建议历史
+control/selection_manager/status.json     当前模型、状态与失败原因
 control/broker_state.json                额度与提交恢复状态
 control/broker_events.jsonl              Broker 决策审计
-control/feedback/<source>.jsonl          按来源隔离的榜单反馈
+control/feedback/global.jsonl            全局完整提交反馈，供控制平面审计
+control/feedback/<source>.jsonl          路线自己的完整反馈 + 校准摘要
 RUN_STATUS.json                          最终摘要
 ```
+
+每次提交会先产生 `submission_result`，公榜可读后再产生 `leaderboard_score`。反馈包含
+candidate/submission ID、用途与 parent、完整 E0 mean/std/pooled/per-fold、contract
+哈希、执行状态、Public 分数、Local-Public residual、校准版本/预测、选择原因和剩余
+额度。Codex、Claude 通过各自的 `FEEDBACK.jsonl` 获取；HearSay 的每个 solver 也会
+逐条收到全部未读的 HearSay 路线反馈，不再只截取末尾若干行。Search 完成后自行
+结束，因此不会被重新唤醒；跨路线完整历史只进入 Selection Manager，不互相污染
+三条独立探索线。
 
 Broker 会在外部调用前先写 `reserved`；网络调用结果不确定时保留为 `ambiguous`。
 这两种记录都不会被自动重试，从而避免“提交已成功但本地来不及落盘”造成重复消耗；

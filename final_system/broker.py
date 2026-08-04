@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 import time
 import uuid
 from collections import Counter
 from pathlib import Path
 from typing import Protocol
 
-from .io import append_jsonl, atomic_json, locked, read_json
+from search_system.ioai_agent_system.redaction import redact_value
+
+from .io import append_jsonl, atomic_json, canonical, locked, read_json
 from .registry import CandidateRegistry
 
 
@@ -31,6 +34,10 @@ class SubmissionBroker:
         anti_monopoly_fraction: float,
         min_local_gain: float,
         direction: str,
+        manager_enabled: bool = False,
+        recommendation_path: Path | None = None,
+        calibration_path: Path | None = None,
+        manager_fallback_seconds: float = 0.0,
     ):
         self.root = Path(root)
         self.registry = registry
@@ -47,6 +54,14 @@ class SubmissionBroker:
         self.anti_monopoly_fraction = anti_monopoly_fraction
         self.min_local_gain = min_local_gain
         self.direction = direction
+        self.manager_enabled = manager_enabled
+        self.recommendation_path = Path(recommendation_path) \
+            if recommendation_path else None
+        self.calibration_path = Path(calibration_path) if calibration_path else None
+        self.manager_fallback_seconds = manager_fallback_seconds
+        self.manager_context_state_path = (
+            self.root / "selection_manager" / "context_state.json"
+        )
         if not self.state_path.exists():
             atomic_json(
                 self.state_path,
@@ -131,10 +146,91 @@ class SubmissionBroker:
         value = record.get("evaluation", {}).get("mean")
         return float(value) if value is not None else None
 
-    def _sort(self, records: list[dict]) -> list[dict]:
+    def _selection_score(
+        self, record: dict, calibration: dict | None = None,
+    ) -> float | None:
+        local = self._score(record)
+        if local is None:
+            return None
+        calibration = calibration or {}
+        if not calibration.get("active"):
+            return local
+        prediction = calibration.get("candidate_predictions", {}).get(
+            record["candidate_id"], {}
+        )
+        value = prediction.get("adjusted_score")
+        try:
+            return float(value) if value is not None else local
+        except (TypeError, ValueError):
+            return local
+
+    def _feedback_packet(self, row: dict, event: str) -> dict:
+        record = self.registry.get(row["candidate_id"]) or {}
+        evaluation = record.get("evaluation") or {}
+        local = row.get("local_score")
+        leaderboard = row.get("leaderboard_score")
+        residual = None
+        if local is not None and leaderboard is not None:
+            residual = float(leaderboard) - float(local)
+        calibration = read_json(self.calibration_path, {}) \
+            if self.calibration_path else {}
+        return redact_value({
+            "schema_version": 1,
+            "event": event,
+            "timestamp": time.time(),
+            "submission_id": row.get("submission_id"),
+            "candidate_id": row.get("candidate_id"),
+            "source_lane": row.get("source_lane"),
+            "submission_class": row.get("submission_class"),
+            "selection_reason": row.get("selection_reason"),
+            "candidate": {
+                "purpose": record.get("purpose"),
+                "parent_id": record.get("parent_id"),
+                "accelerator": record.get("accelerator"),
+                "submission_mode": record.get("submission_mode"),
+            },
+            "local_evaluation": {
+                "mean": evaluation.get("mean"),
+                "std": evaluation.get("std"),
+                "pooled": evaluation.get("pooled"),
+                "per_fold": evaluation.get("per_fold"),
+                "contract_sha256": evaluation.get("contract_sha256"),
+            },
+            "leaderboard": {
+                "public_score": leaderboard,
+                "local_public_residual": residual,
+            },
+            "execution": row.get("result"),
+            "calibration": {
+                "version": calibration.get("version"),
+                "active": calibration.get("active", False),
+                "candidate_prediction": (
+                    calibration.get("candidate_predictions", {}).get(
+                        row.get("candidate_id")
+                    ) if calibration.get("active") else None
+                ),
+            },
+            "quota": {
+                "remaining": self.remaining(),
+                "reservable": self.reservable(),
+                "final_reserve": self.final_reserve,
+            },
+        })
+
+    def _emit_feedback(self, row: dict, event: str) -> None:
+        packet = self._feedback_packet(row, event)
+        append_jsonl(self.feedback_root / "global.jsonl", packet)
+        append_jsonl(
+            self.feedback_root / f"{row['source_lane']}.jsonl", packet
+        )
+        append_jsonl(self.events_path, {"event": event, **packet})
+
+    def _sort(
+        self, records: list[dict], calibration: dict | None = None,
+    ) -> list[dict]:
         sign = 1 if self.direction == "maximize" else -1
         def key(record: dict) -> tuple[bool, float, float]:
-            score = self._score(record)
+            score = self._selection_score(record, calibration)
             return (
                 score is not None,
                 sign * score if score is not None else float("-inf"),
@@ -155,11 +251,16 @@ class SubmissionBroker:
             and record.get("format", {}).get("valid")
         ]
 
-    def _best_submitted_local(self) -> float | None:
-        values = [
-            row.get("local_score") for row in self.consumed()
-            if row.get("local_score") is not None
-        ]
+    def _best_submitted_score(self, calibration: dict) -> float | None:
+        values: list[float] = []
+        for row in self.consumed():
+            record = self.registry.get(row["candidate_id"])
+            value = (
+                self._selection_score(record, calibration)
+                if record is not None else row.get("local_score")
+            )
+            if value is not None:
+                values.append(float(value))
         if not values:
             return None
         return (max(values) if self.direction == "maximize" else min(values))
@@ -173,14 +274,15 @@ class SubmissionBroker:
             else score < incumbent - self.min_local_gain
         )
 
-    def _anti_monopoly_choice(self, ranked: list[dict]) -> dict | None:
+    def _anti_monopoly_options(self, ranked: list[dict]) -> list[dict]:
         if not ranked:
-            return None
+            return []
         nonfloor = [
             row for row in self.committed()
             if row["submission_class"] != "floor"
         ]
         counts = Counter(row["source_lane"] for row in nonfloor)
+        output: list[dict] = []
         for record in ranked:
             lane = record["source_lane"]
             total_after = len(nonfloor) + 1
@@ -191,30 +293,33 @@ class SubmissionBroker:
                 for item in ranked
             )
             if not other_ready or share <= self.anti_monopoly_fraction:
-                return record
-        return None
+                output.append(record)
+        return output
 
-    def select(self, *, fraction_elapsed: float, force_final: bool = False) -> tuple[dict, str] | None:
+    def _policy_options(
+        self, *, fraction_elapsed: float, force_final: bool = False,
+    ) -> tuple[list[dict], str]:
         if self.reservable() <= 0:
-            return None
-        eligible = self._sort(self._eligible())
+            return [], ""
+        calibration = read_json(self.calibration_path, {}) \
+            if self.calibration_path else {}
+        eligible = self._sort(self._eligible(), calibration)
         if not eligible:
-            return None
+            return [], ""
         allocated = self.committed()
         if not allocated:
-            return eligible[0], "floor"
+            return eligible, "floor"
 
         final_phase = force_final or fraction_elapsed >= self.final_start_fraction
         if final_phase:
             finals = sum(row["submission_class"] == "final" for row in allocated)
             if finals >= self.final_reserve:
-                return None
+                return [], ""
             scored = [record for record in eligible if self._score(record) is not None]
-            return ((scored or eligible)[0], "final")
+            return (scored or eligible), "final"
 
-        # 结束前保留 final_reserve；探索阶段不会借用它。
         if self.reservable() <= self.final_reserve:
-            return None
+            return [], ""
         calibrated = {
             row["source_lane"] for row in allocated
             if row["submission_class"] == "calibration"
@@ -229,20 +334,139 @@ class SubmissionBroker:
                 and self._score(record) is not None
             ]
             if choices:
-                return choices[0], "calibration"
+                return choices, "calibration"
 
-        incumbent = self._best_submitted_local()
-        milestones = [
-            record for record in eligible
-            if self._score(record) is not None
-            and self._improves(self._score(record), incumbent)  # type: ignore[arg-type]
-        ]
-        choice = (
-            self._anti_monopoly_choice(milestones)
-            if fraction_elapsed < 0.5 else
-            (milestones[0] if milestones else None)
+        incumbent = self._best_submitted_score(calibration)
+        milestones = []
+        for record in eligible:
+            value = self._selection_score(record, calibration)
+            if value is not None and self._improves(value, incumbent):
+                milestones.append(record)
+        if fraction_elapsed < 0.5:
+            milestones = self._anti_monopoly_options(milestones)
+        return milestones, "milestone" if milestones else ""
+
+    def _candidate_view(self, record: dict, calibration: dict) -> dict:
+        notes_path = Path(record["snapshot_path"]) / "evidence" / "NOTES.md"
+        try:
+            notes = notes_path.read_text(encoding="utf-8", errors="replace")[:4000]
+        except OSError:
+            notes = ""
+        return {
+            "candidate_id": record["candidate_id"],
+            "source_lane": record["source_lane"],
+            "purpose": record.get("purpose"),
+            "parent_id": record.get("parent_id"),
+            "submission_mode": record.get("submission_mode"),
+            "accelerator": record.get("accelerator"),
+            "evaluation": record.get("evaluation"),
+            "calibration": (
+                calibration.get("candidate_predictions", {}).get(
+                    record["candidate_id"]
+                ) if calibration.get("active") else None
+            ),
+            "evidence_notes": notes,
+        }
+
+    def manager_context(
+        self, *, fraction_elapsed: float, force_final: bool = False,
+    ) -> dict | None:
+        options, submission_class = self._policy_options(
+            fraction_elapsed=fraction_elapsed, force_final=force_final
         )
-        return (choice, "milestone") if choice else None
+        if not options:
+            return None
+        calibration = read_json(self.calibration_path, {}) \
+            if self.calibration_path else {}
+        history = []
+        for row in self.submissions():
+            history.append({
+                "submission_id": row.get("submission_id"),
+                "candidate_id": row.get("candidate_id"),
+                "source_lane": row.get("source_lane"),
+                "submission_class": row.get("submission_class"),
+                "selection_reason": row.get("selection_reason"),
+                "local_score": row.get("local_score"),
+                "leaderboard_score": row.get("leaderboard_score"),
+                "result": row.get("result"),
+            })
+        core = {
+            "schema_version": 1,
+            "submission_class": submission_class,
+            "metric_direction": self.direction,
+            "quota": {
+                "max": self.max_submissions,
+                "consumed": len(self.consumed()),
+                "reservable": self.reservable(),
+                "final_reserve": self.final_reserve,
+            },
+            "calibration": calibration,
+            "submission_history": history,
+            "candidates": [
+                self._candidate_view(record, calibration) for record in options
+            ],
+        }
+        safe_core = redact_value(core)
+        if not isinstance(safe_core, dict):  # pragma: no cover - structural guard
+            raise TypeError("redacted manager context must remain an object")
+        return {
+            **safe_core,
+            "context_sha256": hashlib.sha256(canonical(safe_core)).hexdigest(),
+        }
+
+    def _manager_decision(
+        self, context: dict, options: list[dict]
+    ) -> tuple[str, dict | None, str]:
+        digest = context["context_sha256"]
+        state = read_json(self.manager_context_state_path, {})
+        if state.get("context_sha256") != digest:
+            state = {
+                "context_sha256": digest,
+                # 候选持续到达时不能无限重置等待窗口；一次真正预留后才重置。
+                "first_seen_at": float(state.get("first_seen_at", time.time())),
+            }
+            atomic_json(self.manager_context_state_path, state)
+        recommendation = read_json(self.recommendation_path, {}) \
+            if self.recommendation_path else {}
+        valid = (
+            recommendation.get("context_sha256") == digest
+            and float(recommendation.get("expires_at", 0)) > time.time()
+        )
+        if valid and recommendation.get("decision") == "wait":
+            return "wait", None, "selection_manager_wait"
+        if valid and recommendation.get("decision") == "submit":
+            candidate_id = recommendation.get("candidate_id")
+            selected = next(
+                (record for record in options if record["candidate_id"] == candidate_id),
+                None,
+            )
+            if selected is not None:
+                return "submit", selected, "selection_manager"
+        age = time.time() - float(state.get("first_seen_at", time.time()))
+        if age < self.manager_fallback_seconds:
+            return "wait", None, "selection_manager_pending"
+        return "submit", options[0], "deterministic_manager_fallback"
+
+    def select(
+        self, *, fraction_elapsed: float, force_final: bool = False,
+    ) -> tuple[dict, str, str] | None:
+        options, submission_class = self._policy_options(
+            fraction_elapsed=fraction_elapsed, force_final=force_final
+        )
+        if not options:
+            return None
+        if not self.manager_enabled:
+            return options[0], submission_class, "deterministic_policy"
+        context = self.manager_context(
+            fraction_elapsed=fraction_elapsed, force_final=force_final
+        )
+        if context is None:
+            return None
+        decision, record, reason = self._manager_decision(context, options)
+        return (
+            (record, submission_class, reason)
+            if decision == "submit" and record is not None else None
+        )
 
     def tick(self, *, fraction_elapsed: float, force_final: bool = False) -> dict | None:
         # 选择和预留必须共用一把锁；两个后台 kernel 否则可能选择同一候选，
@@ -254,13 +478,14 @@ class SubmissionBroker:
             if selected is None:
                 attempt = None
             else:
-                record, submission_class = selected
+                record, submission_class, selection_reason = selected
                 submission_id = f"sub-{uuid.uuid4().hex[:10]}"
                 attempt = {
                     "submission_id": submission_id,
                     "candidate_id": record["candidate_id"],
                     "source_lane": record["source_lane"],
                     "submission_class": submission_class,
+                    "selection_reason": selection_reason,
                     "local_score": self._score(record),
                     "reserved_at": time.time(),
                     "result": {"consumed": False, "status": "reserved"},
@@ -269,6 +494,8 @@ class SubmissionBroker:
             if attempt is not None:
                 state["submissions"].append(attempt)
                 atomic_json(self.state_path, state)
+                if self.manager_enabled:
+                    atomic_json(self.manager_context_state_path, {})
         if attempt is None:
             self.write_status(fraction_elapsed=fraction_elapsed)
             return None
@@ -293,14 +520,12 @@ class SubmissionBroker:
             atomic_json(self.state_path, state)
         if result_value.get("consumed"):
             self.registry.mark_submitted(record["candidate_id"])
-        append_jsonl(
-            self.events_path,
-            {"event": "submission_result", "submission_id": submission_id, **result_value},
-        )
         self.write_status(fraction_elapsed=fraction_elapsed)
-        return next(
+        completed = next(
             row for row in self.submissions() if row["submission_id"] == submission_id
         )
+        self._emit_feedback(completed, "submission_result")
+        return completed
 
     def refresh_scores(self) -> int:
         scores = self.adapter.scores()
@@ -322,17 +547,6 @@ class SubmissionBroker:
             if updates:
                 atomic_json(self.state_path, state)
         for row in updates:
-            feedback = {
-                "timestamp": row["scored_at"],
-                "submission_id": row["submission_id"],
-                "candidate_id": row["candidate_id"],
-                "submission_class": row["submission_class"],
-                "local_score": row.get("local_score"),
-                "leaderboard_score": row["leaderboard_score"],
-            }
-            append_jsonl(
-                self.feedback_root / f"{row['source_lane']}.jsonl", feedback
-            )
-            append_jsonl(self.events_path, {"event": "leaderboard_score", **feedback})
+            self._emit_feedback(row, "leaderboard_score")
         self.write_status()
         return len(updates)

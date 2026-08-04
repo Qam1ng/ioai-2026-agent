@@ -22,6 +22,7 @@ from search_system.ioai_agent_system.search_orchestrator import (
 )
 
 from .broker import SubmissionBroker
+from .calibration import FeedbackCalibrator
 from .config import SystemConfig
 from .evaluation import freeze_contract
 from .io import append_jsonl, atomic_json, read_json, sha256_file, tree_hash
@@ -33,6 +34,7 @@ from .runners import (
     OpenRouterCodexRunner,
     run_lane_loop,
 )
+from .selection import SelectionManager
 
 ROOT = Path(__file__).resolve().parents[1]
 _REQUIRED_SEARCH = (
@@ -91,16 +93,21 @@ class FinalController:
         self.status_path = self.session / "RUN_STATUS.json"
         self._fallback_snapshot: AssetSnapshot | None = None
         self._hearsay_process: asyncio.subprocess.Process | None = None
+        self._selection_task: asyncio.Task | None = None
         self._stable: dict[str, tuple[str, int]] = {}
 
     def _event(self, event: str, **payload: Any) -> None:
         append_jsonl(self.events, {"timestamp": time.time(), "event": event, **payload})
 
-    def _claude_runner(self, profile_dir: Path) -> ClaudeSubscriptionRunner:
+    def _claude_runner(
+        self, profile_dir: Path, *, model: str | None = None,
+        effort: str | None = None, allowed_tools: str | None = None,
+    ) -> ClaudeSubscriptionRunner:
         c = self.config.claude
         return ClaudeSubscriptionRunner(
-            binary=c.binary, model=c.model, effort=c.effort,
+            binary=c.binary, model=model or c.model, effort=effort or c.effort,
             profile_dir=profile_dir,
+            **({"allowed_tools": allowed_tools} if allowed_tools is not None else {}),
         )
 
     def _codex_runner(self) -> OpenRouterCodexRunner:
@@ -327,13 +334,34 @@ class FinalController:
 
     async def _monitor(
         self, *, registry: CandidateRegistry, broker: SubmissionBroker,
+        calibrator: FeedbackCalibrator,
+        selection_manager: SelectionManager | None,
         started: float, deadline: float, exploration_deadline: float,
         submission_deadline: float,
     ) -> None:
         last_scores = 0.0
+        last_manager_started = 0.0
+        last_manager_context = ""
+        last_calibration_version = ""
         contract_frozen = False
         active_submissions: set[asyncio.Task] = set()
+        active_manager: asyncio.Task | None = None
         while time.monotonic() < deadline:
+            if active_manager is not None and active_manager.done():
+                try:
+                    recommendation = active_manager.result()
+                    self._event(
+                        "selection_manager_finished",
+                        status="complete" if recommendation else "failed",
+                        recommendation=recommendation or {},
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    self._event(
+                        "selection_manager_error",
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
+                active_manager = None
+                self._selection_task = None
             completed = {task for task in active_submissions if task.done()}
             for task in completed:
                 try:
@@ -364,6 +392,72 @@ class FinalController:
                 registry.refresh_evaluations()
             elapsed = time.monotonic() - started
             fraction = min(1.0, elapsed / max(deadline - started, 1))
+            if time.monotonic() - last_scores >= 60:
+                updates = await asyncio.to_thread(broker.refresh_scores)
+                if updates:
+                    self._event("leaderboard_feedback", updates=updates)
+                last_scores = time.monotonic()
+
+            calibration = calibrator.update(
+                registry.records(), broker.submissions()
+            )
+            version = str(calibration.get("version", ""))
+            if version and version != last_calibration_version:
+                summary = {
+                    "schema_version": 1,
+                    "event": "calibration_update",
+                    "timestamp": time.time(),
+                    "version": version,
+                    "base_contract": calibration.get("base_contract"),
+                    "active": calibration.get("active", False),
+                    "reason": calibration.get("reason"),
+                    "feedback_count": calibration.get("feedback_count", 0),
+                    "baseline_spearman": calibration.get("baseline_spearman"),
+                    "calibrated_loo_spearman": calibration.get(
+                        "calibrated_loo_spearman"
+                    ),
+                    "residual_rmse": calibration.get("residual_rmse"),
+                    "blend_weight": calibration.get("blend_weight", 0.0),
+                }
+                for lane in ("global", "hearsay", "codex", "claude"):
+                    append_jsonl(
+                        self.control / "feedback" / f"{lane}.jsonl", summary
+                    )
+                self._event("calibration_updated", calibration=summary)
+                last_calibration_version = version
+
+            if selection_manager is not None:
+                context = broker.manager_context(
+                    fraction_elapsed=fraction,
+                    force_final=time.monotonic() >= exploration_deadline,
+                )
+                if context is not None and active_manager is None:
+                    now = time.monotonic()
+                    digest = str(context["context_sha256"])
+                    latest = read_json(selection_manager.latest_path, {})
+                    current = (
+                        latest.get("context_sha256") == digest
+                        and float(latest.get("expires_at", 0)) > time.time()
+                    )
+                    interval_passed = (
+                        now - last_manager_started
+                        >= self.config.selection.interval_seconds
+                    )
+                    if not current and (
+                        not last_manager_context or interval_passed
+                    ):
+                        active_manager = asyncio.create_task(
+                            selection_manager.recommend(context)
+                        )
+                        self._selection_task = active_manager
+                        last_manager_started = now
+                        last_manager_context = digest
+                        self._event(
+                            "selection_manager_started",
+                            context_sha256=digest,
+                            candidate_count=len(context.get("candidates", [])),
+                            submission_class=context.get("submission_class"),
+                        )
             if time.monotonic() < submission_deadline:
                 while (
                     len(active_submissions)
@@ -376,11 +470,6 @@ class FinalController:
             else:
                 # 最后缓冲只轮询和恢复，不再启动一个可能越过截止线的新 kernel。
                 broker.write_status(fraction_elapsed=fraction)
-            if time.monotonic() - last_scores >= 60:
-                updates = await asyncio.to_thread(broker.refresh_scores)
-                if updates:
-                    self._event("leaderboard_feedback", updates=updates)
-                last_scores = time.monotonic()
             if added:
                 self._event("candidates_registered", count=added)
             await asyncio.sleep(self.config.run.poll_seconds)
@@ -395,6 +484,10 @@ class FinalController:
                     "broker_background_error",
                     error=f"{type(submission).__name__}: {submission}",
                 )
+        if active_manager is not None:
+            active_manager.cancel()
+            await asyncio.gather(active_manager, return_exceptions=True)
+            self._selection_task = None
 
     async def run(self) -> Path:
         self._prepare()
@@ -442,6 +535,28 @@ class FinalController:
         registry = CandidateRegistry(
             self.control / "candidates", assets=assets, evaluation=self.eval_root
         )
+        selection = self.config.selection
+        calibrator = FeedbackCalibrator(
+            self.control / "calibration",
+            min_feedback=selection.calibration_min_feedback,
+            ridge_strength=selection.calibration_ridge_strength,
+            min_rank_gain=selection.calibration_min_rank_gain,
+            max_blend_weight=selection.calibration_max_blend_weight,
+        )
+        selection_runner = self._claude_runner(
+            self.config.claude.integrated_profile_dir,
+            model=selection.model,
+            effort=selection.effort,
+            allowed_tools="Read",
+        ) if selection.enabled else None
+        selection_manager = SelectionManager(
+            self.control / "selection_manager",
+            runner=selection_runner,
+            model=selection.model,
+            effort=selection.effort,
+            timeout_seconds=selection.timeout_seconds,
+            recommendation_ttl_seconds=selection.recommendation_ttl_seconds,
+        ) if selection_runner is not None else None
         broker = SubmissionBroker(
             self.control, registry=registry, adapter=adapter,
             max_submissions=max_submissions,
@@ -453,6 +568,12 @@ class FinalController:
             anti_monopoly_fraction=self.config.run.anti_monopoly_fraction,
             min_local_gain=self.config.run.min_local_gain,
             direction=self.config.run.metric_direction,
+            manager_enabled=selection.enabled,
+            recommendation_path=(
+                selection_manager.latest_path if selection_manager else None
+            ),
+            calibration_path=calibrator.latest_path,
+            manager_fallback_seconds=selection.fallback_seconds,
         )
 
         codex_runner = self._codex_runner()
@@ -508,7 +629,9 @@ class FinalController:
 
         hearsay_task = asyncio.create_task(search_then_hearsay())
         monitor_task = asyncio.create_task(self._monitor(
-            registry=registry, broker=broker, started=started, deadline=deadline,
+            registry=registry, broker=broker, calibrator=calibrator,
+            selection_manager=selection_manager,
+            started=started, deadline=deadline,
             exploration_deadline=exploration_deadline,
             submission_deadline=submission_deadline,
         ))
@@ -528,8 +651,18 @@ class FinalController:
             if not monitor_task.done():
                 monitor_task.cancel()
                 await asyncio.gather(monitor_task, return_exceptions=True)
+            if self._selection_task is not None:
+                self._selection_task.cancel()
+                await asyncio.gather(
+                    self._selection_task, return_exceptions=True
+                )
+                self._selection_task = None
             await asyncio.gather(
                 codex_runner.terminate_all(), claude_runner.terminate_all(),
+                *(
+                    [selection_runner.terminate_all()]
+                    if selection_runner is not None else []
+                ),
                 self._stop_hearsay(), return_exceptions=True,
             )
 
@@ -545,6 +678,10 @@ class FinalController:
             "evaluation_contract": read_json(self.eval_root / "contract.json"),
             "broker": broker.write_status(fraction_elapsed=1.0),
             "candidate_count": len(registry.records()),
+            "calibration": read_json(calibrator.latest_path, {}),
+            "selection_manager": read_json(
+                selection_manager.status_path, {}
+            ) if selection_manager else {"status": "disabled"},
         })
         atomic_json(self.status_path, final_status)
         self._event("run_complete", status=str(self.status_path))

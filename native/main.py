@@ -55,6 +55,7 @@ ALL_SOLVERS: list[str] = []
 # Agents whose session stopped responding and could not be interrupted.
 HUNG: set[str] = set()
 EXTERNAL_BROKER: dict[str, Path | None] = {"path": None}
+EXTERNAL_FEEDBACK_CURSOR: dict[str, int] = {}
 
 
 def _tree_sha256(root: Path | None) -> str:
@@ -142,18 +143,21 @@ def external_context_contract(args, *, evaluator: bool = False) -> str:
 """
 
 
-def external_feedback(args) -> str:
+def external_feedback(args, solver: str) -> str:
     if not args.external_broker_dir:
         return ""
     path = Path(args.external_broker_dir) / "feedback" / "hearsay.jsonl"
     if not path.is_file():
         return ""
     try:
-        lines = path.read_text(encoding="utf-8").splitlines()[-8:]
+        lines = path.read_text(encoding="utf-8").splitlines()
     except OSError:
         return ""
-    return ("\n\n# 外部 Broker 新反馈（仅 HearSay 路线）\n" + "\n".join(lines)) \
-        if lines else ""
+    cursor = min(EXTERNAL_FEEDBACK_CURSOR.get(solver, 0), len(lines))
+    unseen = lines[cursor:]
+    EXTERNAL_FEEDBACK_CURSOR[solver] = len(lines)
+    return ("\n\n# 外部 Broker 新反馈（仅 HearSay 路线，逐条仅投递一次）\n"
+            + "\n".join(unseen)) if unseen else ""
 
 REVIVAL = """
 你的上一段 session 在整轮运行结束前中断了，原因可能是卡死或崩溃。现在是新
@@ -646,7 +650,7 @@ async def run_solver(solver: str, ws: Path, args, budget: Budget,
                     news = facts.board().render_unseen(solver)
                     if news:
                         prompt += "\n" + news
-                    prompt += external_feedback(args)
+                    prompt += external_feedback(args, solver)
 
                     before = progress_mark(ws, solver)
                     await client.query(prompt)

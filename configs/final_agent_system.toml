@@ -64,3 +64,20 @@ effort = "high"
 solvers = 3
 rounds = 40
 max_turns = 250
+
+[selection]
+enabled = true
+model = "claude-fable-5"
+effort = "high"
+
+# Manager 只给建议；无有效建议超过 fallback_seconds 后，Broker 才使用确定性兜底。
+interval_seconds = 90
+timeout_seconds = 180
+recommendation_ttl_seconds = 300
+fallback_seconds = 240
+
+# E0 永远冻结。下列参数只控制 Public-LB 校准层；留一排序没有改善时不会启用。
+calibration_min_feedback = 4
+calibration_ridge_strength = 10.0
+calibration_min_rank_gain = 0.05
+calibration_max_blend_weight = 0.50

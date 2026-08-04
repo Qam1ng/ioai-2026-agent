@@ -70,7 +70,9 @@ and stores every prompt and JSONL trajectory. See the
 
 The integrated competition controller lives in [`final_system/`](final_system/):
 Search→HearSay plus independent Codex and Claude Code fallback lanes, one frozen
-local evaluator, and one persistent submission broker. See the
+local evaluator, a versioned Public-LB calibrator, a Claude Code + Fable 5
+Selection Manager (`high`, advisory only), and one persistent submission broker
+that retains sole Kaggle authority. See the
 [Chinese architecture and runbook](docs/最终Agent系统.md). Real Kaggle writes are
 disabled unless the operator explicitly passes `--live`.
 
