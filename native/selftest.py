@@ -894,6 +894,58 @@ def test_last_act() -> None:
     check("an announcement that cannot be written does not raise", True, True)
 
 
+def test_api_failure() -> None:
+    """Run 14: 120 of 121 rounds came back as API errors and nothing said so.
+
+    The harness printed "stalled 39 rounds — nudging" for all three solvers,
+    which reads as a thinking problem, and retried immediately every time —
+    the worst response to a rate limit. Meanwhile `budget_line` rendered
+    `cost=$25.51/0` because the ceiling had just been removed, so the solvers
+    also believed they were out of money and dumped their whole plan into one
+    background job. Two separate ways of telling an agent something false.
+    """
+    print("\n[api failures are not stalls]")
+    from types import SimpleNamespace
+
+    from agent.orchestrator import Budget
+    from native import main as M
+
+    b = Budget(deadline_s=3600, max_submissions=3, max_cost_usd=0.0)
+    b.cost_usd = 25.51
+    line = M.budget_line(b)
+    check("an uncapped run does not read as an exhausted one",
+          "/0" in line, False)
+    check("  and says so in words the agent can act on",
+          "no ceiling" in line, True)
+    b.max_cost_usd = 40.0
+    check("a real ceiling is still shown as a fraction",
+          "cost=$25.51/40" in M.budget_line(b), True)
+
+    M.API_ERRORS.clear()
+    msg = SimpleNamespace(is_error=True, api_error_status=429, subtype="success",
+                          result="rate limit exceeded", errors=None,
+                          terminal_reason=None, stop_reason=None)
+    for _ in range(5):
+        M.note_api_error("solver_a", msg)
+    key = next(iter(M.API_ERRORS))
+    check("repeated API errors are counted, not swallowed",
+          M.API_ERRORS[key], 5)
+    check("  and keyed by status so two causes do not merge",
+          key.startswith("429:"), True)
+
+    src = Path("native/main.py").read_text()
+    check("the trace keeps the HTTP status", "api_error_status" in src, True)
+    check("  and the stop reason and error strings",
+          'stop=getattr(msg, "stop_reason"' in src
+          and 'errors=(getattr(msg, "errors"' in src, True)
+    check("an errored round backs off instead of retrying at once",
+          "api_backoff" in src and "2 ** min(api_fails - 1, 4)" in src, True)
+    check("  and does not inflate the stall counter",
+          "Not a stall: the query never reached a model" in src, True)
+    check("enough of them ends the agent rather than burning the window",
+          "if api_fails >= 8:" in src, True)
+
+
 def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         ws = Path(td)
@@ -913,6 +965,7 @@ def main() -> int:
     test_kernel_route()
     test_env_failure()
     test_uncapped()
+    test_api_failure()
     test_last_act()
     print("\n" + ("ALL PASS" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
     return 1 if FAIL else 0

@@ -113,10 +113,19 @@ def reap_workspace_processes(ws: Path) -> int:
 
 
 def budget_line(b: Budget) -> str:
+    """What the agents are told about their own limits, once per round.
+
+    When the cost ceiling was removed this still rendered `cost=$25.51/0`, and
+    all three solvers read that as an exhausted budget: "Budget is nearly out —
+    writing the entire pipeline in one shot and running it in the background."
+    Taking the brake off made them panic. A number the agents act on has to say
+    what it means when it is switched off.
+    """
+    cost = (f"cost=${b.cost_usd:.2f}/{b.max_cost_usd:.0f}" if b.max_cost_usd
+            else f"cost=${b.cost_usd:.2f} (no ceiling — spend what the work needs)")
     return (f"[budget] elapsed={b.elapsed() / 60:.0f}min "
             f"remaining={max(b.remaining(), 0) / 60:.0f}min "
-            f"submissions={b.submissions}/{b.max_submissions} "
-            f"cost=${b.cost_usd:.2f}/{b.max_cost_usd:.0f}")
+            f"submissions={b.submissions}/{b.max_submissions} " + cost)
 
 
 def opts(solver: str, ws: Path, args, budget: Budget, trace: Tracer,
@@ -250,6 +259,35 @@ FATAL_ENV = (
 BROKEN: dict = {}
 
 
+API_ERRORS: dict[str, int] = {}
+# Did this agent's last round come back as an API error rather than an answer?
+ERRORED: dict[str, bool] = {}
+
+
+def note_api_error(solver: str, msg) -> None:
+    """Say out loud that a round failed, and why, the first time and then rarely.
+
+    An errored round is not a stalled agent. Run 14 printed "stalled 39 rounds —
+    nudging" for all three solvers while every single query was coming back as
+    an API error, so the operator saw a thinking problem and the harness kept
+    paying for retries of something that could not succeed.
+    """
+    status = getattr(msg, "api_error_status", None)
+    why = (str(getattr(msg, "result", "") or "")
+           or "; ".join(getattr(msg, "errors", None) or [])
+           or str(getattr(msg, "terminal_reason", "") or "")
+           or f"subtype={getattr(msg, 'subtype', '?')}")
+    key = f"{status}:{why[:60]}"
+    n = API_ERRORS[key] = API_ERRORS.get(key, 0) + 1
+    if n in (1, 5) or n % 25 == 0:
+        head = f"HTTP {status}" if status else "API error"
+        print(f"  !! [{solver}] {head} (x{n} this run): {why[:220]}", flush=True)
+    if n == 5:
+        announce(f"agents are getting {('HTTP ' + str(status)) if status else 'API errors'} "
+                 f"on most rounds — this is the environment, not the task.",
+                 kind="env", why="api errors")
+
+
 def note_env(text: str, solver: str) -> None:
     """Record a failure that no amount of retrying will fix."""
     low = text.lower()
@@ -268,6 +306,7 @@ def note_env(text: str, solver: str) -> None:
 async def drain(client, solver: str, budget: Budget, trace: Tracer,
                 mark_active: bool = True) -> tuple[float, int]:
     cost = turns = 0
+    ERRORED[solver] = False
     async for msg in client.receive_response():
         if mark_active:
             # Liveness, sampled where it actually happens. A solver watching a
@@ -289,8 +328,20 @@ async def drain(client, solver: str, budget: Budget, trace: Tracer,
             u = msg.usage or {}
             budget.tokens_in += u.get("input_tokens", 0)
             budget.tokens_out += u.get("output_tokens", 0)
+            # 120 of 121 results in run 14 came back is_error, and the trace
+            # kept only the flag. The SDK carries the diagnosis — an HTTP
+            # status, a stop reason, the error strings — and none of it was
+            # written down, so a whole run's failure had to be guessed at.
             trace.log("result", solver=solver, cost=cost, turns=turns,
-                      err=msg.is_error)
+                      err=msg.is_error, subtype=getattr(msg, "subtype", None),
+                      status=getattr(msg, "api_error_status", None),
+                      stop=getattr(msg, "stop_reason", None),
+                      terminal=getattr(msg, "terminal_reason", None),
+                      errors=(getattr(msg, "errors", None) or [])[:3],
+                      detail=str(getattr(msg, "result", "") or "")[:400])
+            if msg.is_error:
+                ERRORED[solver] = True
+                note_api_error(solver, msg)
     return cost, turns
 
 
@@ -387,6 +438,7 @@ async def run_solver(solver: str, ws: Path, args, budget: Budget,
     spent = 0.0
     costs: list[float] = []
     stalled = 0
+    api_fails = 0
     usage = None
     print(f"[{solver}] start | no assigned angle | cap=${cap:.0f}", flush=True)
 
@@ -467,6 +519,31 @@ async def run_solver(solver: str, ws: Path, args, budget: Budget,
                         usage = await client.get_context_usage()
                     except Exception:  # noqa: BLE001
                         usage = None
+                    if ERRORED.get(solver):
+                        # Not a stall: the query never reached a model that
+                        # could act. Nudging it is asking a busy signal to try
+                        # harder, and retrying instantly is the worst thing to
+                        # do to a rate limit. Back off, and do not let it
+                        # inflate the stall counter that drives the nudges.
+                        api_fails += 1
+                        wait = min(60 * 2 ** min(api_fails - 1, 4), 900)
+                        print(f"  [{solver}] round {rnd} failed at the API "
+                              f"({api_fails} in a row) — waiting {wait}s before "
+                              f"retrying", flush=True)
+                        trace.log("api_backoff", solver=solver, round=rnd,
+                                  consecutive=api_fails, wait_s=wait)
+                        if api_fails >= 8:
+                            print(f"  [{solver}] giving up: {api_fails} rounds "
+                                  f"in a row failed at the API. This is the "
+                                  f"account or the service, not the task.",
+                                  flush=True)
+                            trace.log("stop", solver=solver, reason="api",
+                                      round=rnd)
+                            clean = True
+                            break
+                        await asyncio.sleep(wait)
+                        continue
+                    api_fails = 0
                     stalled = (0 if progress_mark(ws, solver) != before
                                else stalled + 1)
                     print(f"  [{solver}] round {rnd}: turns={turns} "
