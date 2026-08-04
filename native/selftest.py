@@ -63,10 +63,14 @@ def test_facts(ws: Path) -> None:
           "[posted]")
     check("a solver may not post a score",
           b.post("result", "my OOF is 0.91", "solver_a")[:10], "[rejected]")
-    check("the harness may", b.post("result", "approach X -> 0.84", "harness")[:8],
+    check("the harness may", b.post(
+        "result", "approach X -> 0.84", "harness",
+        evidence_refs=["evidence/x.json"])[:8],
           "[posted]")
     check("so may the evaluator",
-          b.post("result", "approach Y -> 0.79", "evaluator")[:8], "[posted]")
+          b.post("result", "approach Y -> 0.79", "evaluator",
+                 evidence_refs=["evidence/y.json"])[:8], "[posted]")
+    check("hash chain audits", b.audit()["valid"], True)
 
     # The cap is there to stop agents narrating, and an agent that trips it can
     # read the rejection and repost shorter. A script cannot. The harness
@@ -117,6 +121,8 @@ def test_pipeline(ws: Path) -> None:
     pred[30:] = (pred[30:] + 1) % 4
     (ws / "solver_a" / "out").mkdir(parents=True, exist_ok=True)
     np.save(ws / "solver_a" / "out" / "oof.npy", pred)
+    pd.DataFrame({"id": range(n), "prediction": pred}).to_csv(
+        ws / "solver_a" / "out" / "submission.csv", index=False)
 
     r = run("native.scripts.evaluate", "--candidate", "solver_a", "--workspace", str(ws))
     res = json.loads(r.stdout.strip().splitlines()[-1])
@@ -134,6 +140,57 @@ def test_pipeline(ws: Path) -> None:
     r = run("native.scripts.promote", "--candidate", "solver_a", "--workspace", str(ws))
     check("first candidate promoted",
           json.loads(r.stdout.strip().splitlines()[-1])["decision"], "PROMOTED")
+    from native import evidence
+    from native.scripts.promote import verify_snapshot
+    state = json.loads((ws / "LKG" / "state.json").read_text())
+    solver_a_snapshot = Path(state["development"]["path"])
+    check("LKG snapshot is content-addressed and valid",
+          verify_snapshot(solver_a_snapshot), [])
+
+    # Clean mode must have a real path from evaluator APPROVE to an immutable
+    # clean snapshot; otherwise the submitter waits forever on an empty tier.
+    ids = np.asarray([f"id-{i}" for i in range(n)])
+    loc_pred = pred.astype(float).reshape(-1, 1)
+    np.savez(
+        ws / "solver_a" / "out" / "sample_locality_probes.npz",
+        canonical_ids=ids, canonical_predictions=loc_pred,
+        permuted_ids=ids[::-1], permuted_predictions=loc_pred[::-1],
+        subset_ids=ids[[1, 4, 7]], subset_predictions=loc_pred[[1, 4, 7]],
+        rebatched_ids=np.roll(ids, 5), rebatched_predictions=np.roll(loc_pred, 5, axis=0),
+    )
+    from native.scripts.sample_locality import record as locality_record
+    locality_record(ws, "solver_a")
+    (ws / "review").mkdir()
+    (ws / "review" / "solver_a.json").write_text(
+        json.dumps({"verdict": "APPROVE", "reason": "fixture is valid"}) + "\n")
+
+    class _Trace:
+        def log(self, *args, **kwargs):
+            pass
+
+    from native.main import promote_clean_after_review
+    clean, clean_note = promote_clean_after_review(ws, "solver_a", _Trace())
+    check("explicit review promotes clean LKG", clean["candidate"], "solver_a")
+    clean_snapshot = Path(clean["path"])
+    check("clean snapshot is independently auditable",
+          verify_snapshot(clean_snapshot), [])
+    check("clean snapshot carries its review receipt",
+          (clean_snapshot / "clean_review_receipt.json").is_file(), True)
+    check("clean promotion reports its receipt",
+          "evidence/clean_reviews/" in clean_note, True)
+
+    submitted_csv = solver_a_snapshot / "out" / "submission.csv"
+    r = run(
+        "native.scripts.promote", "--confirm", "solver_a", "--lb", "0.60",
+        "--submitted-snapshot", str(solver_a_snapshot),
+        "--submission-sha256", evidence.sha256_file(submitted_csv),
+        "--workspace", str(ws),
+    )
+    check("public receipt binds the exact submitted snapshot",
+          json.loads(r.stdout.strip().splitlines()[-1])["decision"], "PROMOTED")
+    (ws / "solver_a" / "out" / "submission.csv").write_text("changed\n")
+    check("later live edits cannot mutate the submitted snapshot",
+          verify_snapshot(solver_a_snapshot), [])
     r = run("native.scripts.promote", "--candidate", "solver_b", "--workspace", str(ws))
     check("no-regression gate holds",
           json.loads(r.stdout.strip().splitlines()[-1])["decision"], "REJECTED")
@@ -152,9 +209,10 @@ def test_pipeline(ws: Path) -> None:
     check("confirmed tier accepts first entry",
           json.loads(r.stdout.strip().splitlines()[-1])["decision"], "PROMOTED")
     st = json.loads((ws / "LKG" / "state.json").read_text())
-    check("two tiers tracked separately",
-          (st["local"]["candidate"], st["confirmed"]["candidate"]),
-          ("solver_a", "solver_b"))
+    check("three tiers tracked separately",
+          (st["development"]["candidate"], st["clean"]["candidate"],
+           st["public"]["candidate"]),
+          ("solver_a", "solver_a", "solver_b"))
 
 
 def test_folds_schemes(ws: Path) -> None:
@@ -284,52 +342,70 @@ def test_configs() -> None:
     Division of labour is theirs to negotiate on the board instead.
     """
     print("\n[configurations]")
+    import inspect
+    from native import main as native_main
     from native.prompts import BOARD_MULTI, BOARD_SOLO, CONTRACT
 
+    check("Opus 5 is the default model", native_main.DEFAULT_MODEL,
+          "claude-opus-5")
+    # Was 100.0. A Max subscription draws no balance and in the competition the
+    # system must not stop early on money, so the ceiling is off unless asked
+    # for — three solvers once halted at 33-42 minutes of a 90-minute window.
+    check("no run budget unless one is asked for",
+          "\"--max-cost-usd\", type=float, default=0.0"
+          in inspect.getsource(native_main.main), True)
+
     def render(n: int) -> str:
-        peers = ("You are the only solver on this problem." if n == 1 else
-                 f"Your working directory is yours alone; {n} solvers are "
-                 f"working on this problem in parallel, none of them told "
-                 f"what to do.")
+        peers = ("你是这道题唯一的 solver。" if n == 1 else
+                 f"你的工作目录只属于你；共有 {n} 个 solver 并行解决这道题，"
+                 "没有任何一个被预先指定路线。")
         return CONTRACT.format(slug="x", peers=peers,
+                               mode_contract="# 证据模式：TEST",
                                board=(BOARD_SOLO if n == 1
                                       else BOARD_MULTI.format(n=n)),
                                budget="[budget] ...", deadline_min=30)
 
     solo, multi = render(1), render(3)
-    check("no approach is assigned", "Nobody has assigned you an approach" in multi, True)
+    check("no approach is assigned", "没有人为你预先指定路线" in multi, True)
+    check("agent-facing prompt language is Chinese",
+          "所有面向其他 agent 的说明" in multi, True)
     for gone in ("Model and representation", "Data and augmentation",
                  "Safe baseline first"):
         check(f"  old brief gone: {gone[:22]}", gone in multi, False)
 
-    check("multi announces peers", "3 solvers are working" in multi, True)
-    check("solo claims no peers", "solvers are working" in solo, False)
-    check("solo board is the notebook variant", "only solver" in solo, True)
+    check("multi announces peers", "共有 3 个 solver" in multi, True)
+    check("solo claims no peers", "并行解决这道题" in solo, False)
+    check("solo board is the notebook variant", "唯一的 solver" in solo, True)
 
     # Everything a solver could act on is shared, including what each direction
     # turned out to be worth. The line is provenance, not secrecy: a score
     # computed on the shared folds is a measurement, a self-reported one is a
     # boast measured on who-knows-what split.
-    check("multi asks for a claim", "post it as a `claim`" in multi, True)
-    check("multi warns about duplication", "Duplicated effort" in multi, True)
-    check("results are shared", "`result` facts" in multi, True)
+    check("multi asks for a claim", "发布一条 `claim`" in multi, True)
+    check("multi warns about duplication", "重复劳动" in multi, True)
+    check("results are shared", "以 `result` 事实" in multi, True)
     check("solvers cannot post their own scores",
-          "cannot post scores yourself" in multi, True)
+          "不能自行发布分数" in multi, True)
     check("no unfilled placeholders", "{" in solo or "{" in multi, False)
 
     from native.facts import KINDS, TRUSTED, VERIFIED_ONLY, Board
     check("claim is postable", "claim" in KINDS, True)
     check("result is postable", "result" in KINDS, True)
-    check("result is provenance-gated", VERIFIED_ONLY, ("result",))
+    check("result and decision are provenance-gated",
+          VERIFIED_ONLY, ("result", "decision"))
 
     import tempfile
     with tempfile.TemporaryDirectory() as td:
         b = Board(Path(td) / "t.jsonl", Path(td) / "d.jsonl")
         check("a solver cannot post a result",
               b.post("result", "I hit 0.99", "solver_a")[:10], "[rejected]")
-        check("the evaluator can", b.post("result", "0.84 on folds", "evaluator")[:8],
+        check("the evaluator can", b.post(
+            "result", "0.84 on folds", "evaluator",
+            evidence_refs=["evidence/a.json"])[:8],
               "[posted]")
-        check("so can the harness", b.post("result", "0.84 on folds", "harness")[:8],
+        check("so can the harness", b.post(
+            "result", "0.84 on folds", "harness",
+            evidence_refs=["evidence/a.json"])[:8],
               "[posted]")
         check("solvers keep the other kinds",
               b.post("failure", "shallow CNN plateaus", "solver_a")[:8], "[posted]")
@@ -337,9 +413,9 @@ def test_configs() -> None:
               b.post("claim", "going after the metric asymmetry", "solver_b")[:8],
               "[posted]")
     check("results reach the board via the evaluator",
-          "the evaluator computes those on the shared folds" in multi, True)
+          "这些数由 evaluator" in multi and "共享 folds" in multi, True)
     check("solvers cannot post their own numbers",
-          "You cannot post scores yourself" in multi, True)
+          "你不能自行发布分数" in multi, True)
 
 
 def test_submit_gate() -> None:
@@ -385,7 +461,7 @@ def test_solver_cannot_submit() -> None:
     check("kaggle_submit not offered to solvers", "kaggle_submit" in names, False)
     check("kaggle_submissions still readable", "kaggle_submissions" in names, True)
     check("contract says the harness submits",
-          "You have no submit tool" in CONTRACT, True)
+          "你没有 submit 工具" in CONTRACT, True)
 
 
 def test_format_gate(ws: Path) -> None:
@@ -515,6 +591,12 @@ def test_integrity(ws: Path) -> None:
     record(g, "solver_a", 0.9)
     check("a sealed candidate passes", check_provenance(g, "solver_a"), [])
 
+    (g / "metric.py").write_text("def score(y, p): return 1.0\n")
+    appeared = check_provenance(g, "solver_a")
+    check("an artifact appearing after scoring is caught", len(appeared), 1)
+    check("  and says which artifact appeared", "metric appeared" in appeared[0], True)
+    (g / "metric.py").unlink()
+
     np.save(out / "oof.npy", np.arange(50) * 2)
     bad = check_provenance(g, "solver_a")
     check("swapping the scored file is caught", len(bad), 1)
@@ -541,8 +623,10 @@ def test_integrity(ws: Path) -> None:
     import native.main as M
     src = inspect.getsource(M.integrity_check)
     check("provenance is fatal", "check_provenance" in src, True)
-    check("order dependence is only a warning",
-          '"warnings": check_order_dependence' in src, True)
+    check("order dependence remains a warning",
+          "check_order_dependence" in src and "warnings" in src, True)
+    check("clean mode can require sample locality",
+          "require_sample_locality" in src, True)
 
     from native.prompts import CONTRACT  # noqa: F401
     sk = (ROOT / "skills" / "validation-split" / "SKILL.md").read_text()
@@ -585,7 +669,13 @@ def test_submission_mode() -> None:
     check("contract names the wheel dataset mount",
           "dataset_sources" in CONTRACT, True)
     check("contract says the submit is what must beat the deadline",
-          "submit call, not the scoring" in CONTRACT, True)
+          "必须赶在截止前完成的是 submit 调用" in CONTRACT, True)
+    # The list of required artifacts, not conditional prose keyed on a mode the
+    # API reports as "unknown" for every real (private) task.
+    check("contract requires out/kernel/ outright",
+          "`out/kernel/`：可推送的 kernel 目录" in CONTRACT, True)
+    check("  and says unknown counts as kernel-only",
+          "就当作 kernel-only" in CONTRACT, True)
 
     from agent.tools import registry as Rg
     c = Rg.Ctx(workspace=ROOT, slug="x", budget=None, trace=None)
@@ -712,9 +802,9 @@ def test_kernel_route() -> None:
 
     # 3. The evaluator settled a question about Kaggle by grepping our own log.
     check("the evaluator is told to ask Kaggle, not the trace",
-          "ANYTHING ABOUT KAGGLE, ASK KAGGLE" in M.REVIEW, True)
+          "关于 Kaggle 的任何问题，去问 Kaggle" in M.REVIEW, True)
     check("  with the reason it matters",
-          "not evidence of absence" in M.REVIEW, True)
+          "不等于事情没发生" in M.REVIEW, True)
 
     # 4. That log truncated the commands it was being asked to prove things by.
     check("the trace keeps enough of a command to be evidence",
@@ -959,6 +1049,299 @@ def test_api_failure() -> None:
     check("enough of them ends the agent rather than burning the window",
           "if api_fails >= 8:" in src, True)
 
+def test_evidence_firewall_and_coordination(ws: Path) -> None:
+    print("\n[evidence firewall + coordination]")
+    import numpy as np
+    from native import evidence, facts
+    from native.scripts.coordination import audit as audit_coordination
+    from native.scripts.sample_locality import check as locality_check
+    from native.scripts.sample_locality import record as locality_record
+
+    g = ws / "evidence-v2"
+    g.mkdir()
+    evidence.init_contract(
+        g, mode="competition", slug="fixture", model="fixture-model",
+        effort="high", solvers=["solver_a", "solver_b", "solver_c"],
+        max_cost_usd=2.0, max_submissions=1, deadline_min=5,
+    )
+    b = facts.init(g, day_file=str(g / "day.jsonl"))
+    claim_ids = {}
+    for route, key in (("solver_a", "linear"), ("solver_b", "tree"),
+                       ("solver_c", "metric")):
+        posted = b.post("claim", f"testing {key}", route, claim_key=key)
+        claim_ids[route] = posted.split()[1]
+    check("duplicate mechanism claim fails closed",
+          b.post("claim", "same linear family", "solver_b",
+                 claim_key="linear")[:10], "[rejected]")
+    check("self-adoption cannot masquerade as collaboration",
+          b.post("adoption", "reusing my own route", "solver_a",
+                 related_ids=[claim_ids["solver_a"]])[:10], "[rejected]")
+    check("adoption cannot invent a fact id",
+          b.post("adoption", "using an unknown route", "solver_b",
+                 related_ids=["fact-does-not-exist"])[:10], "[rejected]")
+    b.post("adoption", "using solver_a's feature finding", "solver_b",
+           related_ids=[claim_ids["solver_a"]])
+    (g / "evidence" / "candidates").mkdir(parents=True)
+    (g / "evidence" / "candidates" / "solver_a.json").write_text("{}\n")
+    b.post("result", "linear -> 0.8", "harness",
+           evidence_refs=["evidence/candidates/solver_a.json"])
+    receipt = audit_coordination(g, ["solver_a", "solver_b", "solver_c"])
+    check("coordination references are valid", receipt["valid"], True)
+    check("cross-route adoption is attributed",
+          receipt["collaboration_edges"][0]["from"], "solver_a")
+
+    out = g / "solver_a" / "out"
+    out.mkdir(parents=True)
+    ids = np.asarray([f"id-{i}" for i in range(10)])
+    pred = np.arange(20, dtype=float).reshape(10, 2)
+    np.savez(
+        out / "sample_locality_probes.npz",
+        canonical_ids=ids, canonical_predictions=pred,
+        permuted_ids=ids[::-1], permuted_predictions=pred[::-1],
+        subset_ids=ids[[1, 4, 7]], subset_predictions=pred[[1, 4, 7]],
+        rebatched_ids=ids[[5, 6, 7, 8, 9, 0, 1, 2, 3, 4]],
+        rebatched_predictions=pred[[5, 6, 7, 8, 9, 0, 1, 2, 3, 4]],
+    )
+    check("sample-local probe records", locality_record(g, "solver_a")["valid"],
+          True)
+    check("sample-local receipt verifies", locality_check(g, "solver_a")["valid"],
+          True)
+    evidence.taint_process(g, "solver_c", "forbidden leaderboard read")
+    check("taint is persistent", evidence.is_tainted(g, "solver_c"), True)
+
+    malformed = ws / "malformed-facts.jsonl"
+    malformed.write_text("{not-json}\n", encoding="utf-8")
+    check("board audit does not skip malformed JSON",
+          facts.audit_jsonl(malformed, "task")["valid"], False)
+
+    contract = g / evidence.RUN_CONTRACT
+    value = json.loads(contract.read_text(encoding="utf-8"))
+    value["max_cost_usd"] = 999.0
+    contract.write_text(json.dumps(value) + "\n", encoding="utf-8")
+    firewall_audit = evidence.audit(g)
+    check("run contract tampering is detected", firewall_audit["valid"], False)
+    check("contract audit explains the mismatch",
+          "run contract hash mismatch" in firewall_audit["errors"], True)
+
+
+def test_chicken_timestamp_candidate() -> None:
+    print("\n[chicken timestamp candidate]")
+    from datetime import datetime, timedelta
+    import math
+    from native.scripts import chicken_timestamp_candidate as candidate
+
+    record = {
+        "observations": [
+            {"candidates": [{"text": "2024年06月06日"}]},
+            {"candidates": [{"text": "星期四 11:02:36"}]},
+        ]
+    }
+    check(
+        "conservative DVR parse",
+        candidate.parsed_timestamp(record).isoformat(),
+        "2024-06-06T11:02:36",
+    )
+    check(
+        "partial DVR parse is rejected",
+        candidate.parsed_timestamp(
+            {"observations": [{"candidates": [{"text": "11:02"}]}]}
+        ),
+        None,
+    )
+    check(
+        "official exponential MRE",
+        round(candidate.official_score([10.0, 20.0], [9.0, 22.0]), 12),
+        round(math.exp(-0.1), 12),
+    )
+    start = datetime(2024, 6, 6, 11, 0, 0)
+    timestamps = {
+        "train_000": start,
+        "train_001": start + timedelta(seconds=105),
+        "train_002": start + timedelta(seconds=210),
+    }
+    prediction = candidate.temporal_predictions(
+        ["train_001"],
+        ["train_000", "train_001", "train_002"],
+        timestamps,
+        [10.0, 20.0, 30.0],
+        leave_one_out=True,
+    )
+    check("symmetric timestamp LOO is hand-computable", prediction.tolist(), [20.0])
+    check(
+        "frozen blend weights sum to one",
+        candidate.TEMPORAL_WEIGHT + candidate.VISUAL_WEIGHT,
+        1.0,
+    )
+    check(
+        "git push threshold is the documented public incumbent",
+        candidate.REPO_PUBLIC_BASELINE,
+        0.93156,
+    )
+
+
+def test_chicken_data_synthesis() -> None:
+    print("\n[chicken data synthesis]")
+    import math
+
+    import numpy as np
+
+    from native.scripts import chicken_data_synthesis as synth
+
+    # Geometry: the resized image is exactly twice the density grid, so a crop
+    # window in density coordinates has a hand-computable pixel window.
+    check("wide crop is 171x304", synth.crop_window(0.95, (0.0, 0.0)), (0, 0, 171, 304))
+    check("bottom-right anchor offsets", synth.crop_window(0.95, (1.0, 1.0))[:2], (9, 16))
+    check("tight crop is 140x250", synth.crop_window(0.78, (0.0, 0.0))[2:], (140, 250))
+    check(
+        "crop area fraction is exact",
+        round(171 * 304 / (180 * 320), 10),
+        round(0.9025, 10),
+    )
+    check(
+        "official exponential MRE",
+        round(synth.official_score([10.0, 20.0], [9.0, 22.0]), 12),
+        round(math.exp(-0.1), 12),
+    )
+
+    # The estimator is the sealed incumbent's and this component may not move it.
+    check("ridge alpha frozen", synth.RIDGE_ALPHA, 1.0)
+    check("knn neighbours frozen", synth.KNN_NEIGHBOURS, 2)
+    check("base scale frozen", synth.BASE_SCALE, 0.98055)
+    check(
+        "blend weights sum to one",
+        round(synth.BASE_WEIGHT + synth.LOG_RIDGE_WEIGHT, 10),
+        1.0,
+    )
+    check(
+        "component blend weights match the sealed logblend candidate",
+        (synth.RIDGE_WEIGHT, synth.KNN_WEIGHT, synth.LOG_RIDGE_ALPHA),
+        (0.570968517, 0.429020957, 0.10),
+    )
+    check(
+        "git push threshold is the documented public incumbent",
+        synth.REPO_PUBLIC_INCUMBENT,
+        0.93156,
+    )
+
+    table = synth.recipe_table()
+    check("incumbent recipe adds no rows", table["incumbent_original_only"], [])
+    known = {"full", "full_flip"} | {
+        f"crop{scale:g}{suffix}" for scale in synth.CROP_SCALES for suffix in ("", "_flip")
+    }
+    check(
+        "every recipe references a producible row kind",
+        sorted({tag for tags in table.values() for tag in tags} - known),
+        [],
+    )
+    check("six validation scenarios", len(synth.SCENARIOS), 6)
+    check("five validation seeds", len(synth.VALIDATION_SEEDS), 5)
+
+    # Cell construction: fit and query never overlap, and the purge scenario
+    # really removes the visual nearest neighbour of every held-out frame.
+    blocks = np.repeat(np.arange(10), 10)
+    nearest = np.roll(np.arange(100), 1)
+    for scenario in synth.SCENARIOS:
+        cell = synth.build_cell(scenario, 20260803, blocks, nearest, 100)
+        overlap = sorted(set(cell["fit"].tolist()) & set(cell["query"].tolist()))
+        check(f"{scenario} fit/query disjoint", overlap, [])
+    purged = synth.build_cell("purged_local_block", 20260803, blocks, nearest, 100)
+    leaked = sorted(
+        {int(nearest[p]) for p in purged["query"]} & set(purged["fit"].tolist())
+    )
+    check("purged scenario removes nearest neighbours", leaked, [])
+    noise = synth.build_cell("label_noise_stress", 20260803, blocks, nearest, 100)
+    check("label noise stress carries a factor", "label_factor" in noise, True)
+    thinned = synth.build_cell("label_anchor_thinning", 20260803, blocks, nearest, 100)
+    interleaved = synth.build_cell(
+        "interleaved_session_holdout", 20260803, blocks, nearest, 100
+    )
+    check(
+        "anchor thinning fits on fewer rows than the interleaved baseline",
+        len(thinned["fit"]) < len(interleaved["fit"]),
+        True,
+    )
+
+    # A candidate that changes nothing must not clear the robust gate.
+    zero = np.zeros(30)
+    check(
+        "zero-delta candidate fails the robust gate",
+        bool(
+            float(np.mean(zero > 0)) >= synth.GATE_MIN_POSITIVE_FRACTION
+            and float(np.quantile(zero, 0.10)) > synth.GATE_MIN_QUANTILE10
+        ),
+        False,
+    )
+
+
+def test_ruler_calibration() -> None:
+    print("\n[ruler calibration]")
+    import numpy as np
+
+    from native.scripts import ruler_calibration as cal
+
+    # Nearest-neighbour distance, worked out by hand on a 3-4-5 triangle.
+    query = np.asarray([[0.0, 0.0]])
+    reference = np.asarray([[3.0, 4.0], [10.0, 0.0]])
+    check("nearest distance is the 3-4-5 hypotenuse", cal.nearest_distances(query, reference).tolist(), [5.0])
+    check(
+        "blocking does not change the answer",
+        cal.nearest_distances(np.zeros((5, 2)), reference, block=2).tolist(),
+        [5.0] * 5,
+    )
+
+    groups = np.repeat(np.arange(10), 10)
+    for ruler in ("leave_one_out", "kfold_5", "contiguous_5fold", "interleaved_10pct"):
+        parts = cal.holdouts(ruler, 20260803, 100, groups)
+        covered = sorted(int(i) for part in parts for i in part)
+        check(
+            f"{ruler} partitions every row exactly once",
+            (len(covered), covered == list(range(100))),
+            (100, True),
+        )
+    check(
+        "contiguous five-fold holds out five blocks of twenty",
+        [len(part) for part in cal.holdouts("contiguous_5fold", 20260803, 100, groups)],
+        [20] * 5,
+    )
+    check(
+        "contiguous five-fold keeps rows in arrival order",
+        cal.holdouts("contiguous_5fold", 20260803, 100, groups)[0].tolist() == list(range(20)),
+        True,
+    )
+    check(
+        "shuffled five-fold does not",
+        cal.holdouts("kfold_5", 20260803, 100, groups)[0].tolist() == list(range(20)),
+        False,
+    )
+    check(
+        "grouped five-fold never splits a group",
+        max(
+            len({int(groups[i]) for i in part} & {int(groups[j]) for j in other})
+            for index, part in enumerate(cal.holdouts("grouped_5fold", 20260803, 100, groups))
+            for other in cal.holdouts("grouped_5fold", 20260803, 100, groups)[index + 1 :]
+        ),
+        0,
+    )
+    check(
+        "a ruler needing groups fails closed without them",
+        type(_capture(lambda: cal.holdouts("grouped_5fold", 1, 100, None))).__name__,
+        "ValueError",
+    )
+    check(
+        "an unknown ruler fails closed",
+        type(_capture(lambda: cal.holdouts("vibes", 1, 100, groups))).__name__,
+        "ValueError",
+    )
+    check("warning threshold is 5%", cal.GAP_WARNING_RATIO, 0.05)
+
+
+def _capture(call):
+    try:
+        call()
+    except Exception as exc:  # noqa: BLE001 - the test wants the exception object
+        return exc
+    return None
+
 
 def main() -> int:
     with tempfile.TemporaryDirectory() as td:
@@ -970,6 +1353,10 @@ def main() -> int:
         test_resilience(ws)
         test_integrity(ws)
         test_format_gate(ws)
+        test_evidence_firewall_and_coordination(ws)
+        test_chicken_timestamp_candidate()
+        test_chicken_data_synthesis()
+        test_ruler_calibration()
     test_configs()
     test_submit_gate()
     test_solver_cannot_submit()

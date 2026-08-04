@@ -1,0 +1,22 @@
+{
+  "account_public_best_before": 0.93041,
+  "beats_repo_public_incumbent": false,
+  "git_push_on_score_improvement": false,
+  "prediction_check": {
+    "absolute_error": 0.002233422775303806,
+    "calibrated_ruler_direction_held": true,
+    "predicted_public_score": 0.9270034227753038,
+    "prediction_band": 0.005,
+    "verdict": "calibrated ruler confirmed prospectively",
+    "within_band": true
+  },
+  "promotion": false,
+  "public_score": 0.92477,
+  "repo_public_incumbent": 0.93156,
+  "schema_version": 1,
+  "selected_recipe": "crop_wide_mid",
+  "selection_receipt_sha256": "08705b371b011d63e18eecfd05619acd00ab454cca06c6237a152befaea76b10",
+  "submission_ref": "55228496",
+  "submission_sha256": "cb015310afa268715b7395a990930b6faa4b6312adb31888c1cc81a9f45979b3",
+  "task": "ioai-2025-chicken-counting-mirror-unofficial"
+}

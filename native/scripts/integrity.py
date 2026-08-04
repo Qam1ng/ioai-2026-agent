@@ -27,9 +27,13 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import time
 from pathlib import Path
 
+from native import evidence
+
 SEAL = "integrity.json"
+CANDIDATE_EVIDENCE = "evidence/candidates"
 
 
 def sha(p: Path, chunk: int = 1 << 20) -> str:
@@ -42,7 +46,28 @@ def sha(p: Path, chunk: int = 1 << 20) -> str:
 
 def files_of(ws: Path, cand: str) -> dict[str, Path]:
     out = ws / cand / "out"
-    return {"oof": out / "oof.npy", "submission": out / "submission.csv"}
+    return {
+        "oof": out / "oof.npy",
+        "submission": out / "submission.csv",
+        "folds": ws / "folds.json",
+        "metric": ws / "metric.py",
+    }
+
+
+def code_manifest(ws: Path, cand: str) -> dict[str, str]:
+    root = ws / cand
+    out: dict[str, str] = {}
+    for path in sorted(root.rglob("*")):
+        if not path.is_file() or "out" in path.relative_to(root).parts:
+            continue
+        if path.suffix.lower() not in (".py", ".json", ".yaml", ".yml", ".toml", ".sh"):
+            continue
+        out[str(path.relative_to(root))] = sha(path)
+    return out
+
+
+def evidence_path(ws: Path, cand: str) -> Path:
+    return ws / CANDIDATE_EVIDENCE / f"{cand}.json"
 
 
 def record(ws: Path, cand: str, score: float | None = None) -> dict:
@@ -51,11 +76,19 @@ def record(ws: Path, cand: str, score: float | None = None) -> dict:
     p = ws / SEAL
     if p.exists():
         seal = json.loads(p.read_text())
-    entry = {"score": score}
+    entry = {"schema_version": 2, "candidate": cand, "score": score,
+             "recorded_at_unix": int(time.time())}
     for name, f in files_of(ws, cand).items():
         entry[name] = sha(f) if f.exists() else None
+    entry["code"] = code_manifest(ws, cand)
+    contract = ws / evidence.RUN_CONTRACT
+    entry["run_contract"] = sha(contract) if contract.exists() else None
+    entry["tainted"] = evidence.is_tainted(ws, cand)
+    receipt = ws / cand / "out" / "sample_locality_receipt.json"
+    entry["sample_locality_receipt"] = sha(receipt) if receipt.exists() else None
     seal[cand] = entry
-    p.write_text(json.dumps(seal, indent=2))
+    evidence.write_json(p, seal)
+    evidence.write_json(evidence_path(ws, cand), entry)
     return entry
 
 
@@ -69,12 +102,34 @@ def check_provenance(ws: Path, cand: str) -> list[str]:
     bad = []
     for name, f in files_of(ws, cand).items():
         was, now = seal.get(name), (sha(f) if f.exists() else None)
-        if was and now and was != now:
+        if was is None and now is not None:
+            bad.append(f"{name} appeared after the candidate was scored")
+        elif was and now and was != now:
             bad.append(f"{name} changed after it was scored — the number this "
                        f"candidate was promoted on came from a different file")
         if was and now is None:
             bad.append(f"{name} has disappeared since it was scored")
+    if seal.get("code") != code_manifest(ws, cand):
+        bad.append("candidate code/config changed after it was scored")
+    contract = ws / evidence.RUN_CONTRACT
+    now_contract = sha(contract) if contract.exists() else None
+    if seal.get("run_contract") != now_contract:
+        bad.append("run contract changed after candidate scoring")
+    if evidence.is_tainted(ws, cand) or seal.get("tainted"):
+        bad.append("candidate process is tainted by forbidden audit access")
     return bad
+
+
+def check_sample_locality(ws: Path, cand: str, *, required: bool) -> tuple[list[str], list[str]]:
+    from native.scripts.sample_locality import check
+
+    result = check(ws, cand)
+    if result.get("valid"):
+        return [], []
+    message = "; ".join(result.get("errors", [])) or "sample-locality failed"
+    if required:
+        return [message], []
+    return [], [message]
 
 
 def check_order_dependence(ws: Path, cand: str) -> list[str]:
@@ -129,6 +184,7 @@ def main() -> int:
     ap.add_argument("--workspace", default=".")
     ap.add_argument("--record", action="store_true")
     ap.add_argument("--score", type=float, default=None)
+    ap.add_argument("--require-sample-locality", action="store_true")
     a = ap.parse_args()
     ws = Path(a.workspace)
     if a.record:
@@ -136,8 +192,14 @@ def main() -> int:
         return 0
     fatal = check_provenance(ws, a.candidate)
     warn = check_order_dependence(ws, a.candidate)
+    locality_fatal, locality_warn = check_sample_locality(
+        ws, a.candidate, required=a.require_sample_locality)
+    fatal += locality_fatal
+    warn += locality_warn
     print(json.dumps({"candidate": a.candidate, "ok": not fatal,
-                      "fatal": fatal, "warnings": warn}, indent=2))
+                      "fatal": fatal, "warnings": warn,
+                      "evidence_manifest": str(evidence_path(ws, a.candidate))},
+                     indent=2))
     return 0 if not fatal else 1
 
 

@@ -1,0 +1,83 @@
+{
+  "closest_ruler": "leave_one_out",
+  "feature_space": "raw",
+  "inputs": {
+    "feature_dimension": 2220,
+    "folds_as_used": {
+      "path": "/Users/bytedance/Documents/IOAI/ioai-historical/scratch-datasynth/radar_folds_as_used.npy",
+      "sha256": "73a42b2dcc17eff687e23bf7af156311afbddbad3179f442af516b5add2686cc"
+    },
+    "groups": null,
+    "test_features": {
+      "path": "/Users/bytedance/Documents/IOAI/ioai-historical/scratch-datasynth/radar_test_fingerprints.npz",
+      "sha256": "bacabb60e0c428fa4d3621074f12b57c7ef8b622f7be1e192a2c2260e8661abb"
+    },
+    "test_rows": 500,
+    "train_features": {
+      "path": "/Users/bytedance/Documents/IOAI/ioai-historical/scratch-datasynth/radar_train_fingerprints.npz",
+      "sha256": "f9e28a5e9e9f0f98154c4527069855cf7bcd89b9c4e6f7b1e9013901b0513a6a"
+    },
+    "train_rows": 1000
+  },
+  "live_test_geometry": {
+    "median_test_to_train_distance": 1.8961455645542733,
+    "p25": 1.718602435994399,
+    "p75": 2.088152996729912
+  },
+  "reads_labels": false,
+  "ruler_in_use": {
+    "closest_available": "leave_one_out",
+    "closest_relative_gap": 0.001451368742503904,
+    "is_closest": false,
+    "name": "as_used",
+    "relative_gap_vs_live": 0.00942968429670978,
+    "verdict": "as_used describes the live test geometry to within 0.9%; no ruler change indicated",
+    "warn": false
+  },
+  "rulers": {
+    "as_used": {
+      "gap_vs_live": 0.017880054054353334,
+      "median_query_to_fit_distance": 1.9140256186086266,
+      "p25": 1.7348277844214124,
+      "p75": 2.107034237281259,
+      "relative_gap_vs_live": 0.00942968429670978
+    },
+    "contiguous_5fold": {
+      "gap_vs_live": 0.017880054054353334,
+      "median_query_to_fit_distance": 1.9140256186086266,
+      "p25": 1.7348277844214124,
+      "p75": 2.107034237281259,
+      "relative_gap_vs_live": 0.00942968429670978
+    },
+    "interleaved_10pct": {
+      "gap_vs_live": 0.006558738876203618,
+      "median_query_to_fit_distance": 1.902704303430477,
+      "p25": 1.7292064247967194,
+      "p75": 2.1037428102938156,
+      "relative_gap_vs_live": 0.0034589849001099133
+    },
+    "interleaved_25pct": {
+      "gap_vs_live": 0.023107724869528612,
+      "median_query_to_fit_distance": 1.919253289423802,
+      "p25": 1.743707834274807,
+      "p75": 2.119205253947423,
+      "relative_gap_vs_live": 0.012186682974922624
+    },
+    "kfold_5": {
+      "gap_vs_live": 0.019455853545257806,
+      "median_query_to_fit_distance": 1.915601418099531,
+      "p25": 1.743707834274807,
+      "p75": 2.1145646921674426,
+      "relative_gap_vs_live": 0.010260738367853784
+    },
+    "leave_one_out": {
+      "gap_vs_live": 0.0027520064036314906,
+      "median_query_to_fit_distance": 1.8933935581506418,
+      "p25": 1.7197807705373622,
+      "p75": 2.09088166570014,
+      "relative_gap_vs_live": 0.001451368742503904
+    }
+  },
+  "schema_version": 1,
+  "selection_rule": "smallest absolute gap between median query-to-fit and median test-to-train distance"
+}

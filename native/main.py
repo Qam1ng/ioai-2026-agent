@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -43,6 +44,7 @@ from agent.providers.anthropic_p import _load_dotenv
 from agent.tools import registry as R
 
 from . import facts
+from . import evidence
 from . import supervise as S
 from . import tools as T
 from .prompts import BOARD_MULTI, BOARD_SOLO, CONTINUE, CONTRACT, FIRST
@@ -53,21 +55,36 @@ ALL_SOLVERS: list[str] = []
 # Agents whose session stopped responding and could not be interrupted.
 HUNG: set[str] = set()
 
-REVIVAL = """
-Your previous session ended before the run did — it hung, or it crashed. This is
-a fresh one. You keep your working directory and the board; you do not keep the
-reasoning that got you here, so read rather than assume.
 
-Already in `{cwd}`:
+def mode_contract(args) -> str:
+    if args.mode == "clean-benchmark":
+        return (
+            "# 证据模式：CLEAN BENCHMARK\n\n"
+            "所有 solver 都看不到榜单。不得调用 Kaggle submissions/leaderboard "
+            "接口，也不得搜索网络；任何尝试读取审计集的行为都会永久污染该路线"
+            "及其全部候选证据。本地结果只能按冻结运行策略披露。harness 即使"
+            "观察到公榜分数，也只会在你的上下文之外留存，绝不能将它变成本地"
+            "搜索信号。"
+        )
+    return (
+        "# 证据模式：COMPETITION\n\n"
+        "冻结候选提交后，harness 可能稀疏报告一次榜单校准。它只能用于诊断，"
+        "绝不能被理解为可以围绕公榜连续微调一族相近候选。"
+    )
+
+REVIVAL = """
+你的上一段 session 在整轮运行结束前中断了，原因可能是卡死或崩溃。现在是新
+session。工作目录和事实板仍然保留，但先前推理上下文已经丢失；请读取证据，
+不要凭假设续接。
+
+`{cwd}` 中已有：
 {artifacts}
 
-You posted these to the board earlier, which is the only record of what you were
-attempting:
+你此前在事实板发布过以下内容，这是上一段路线意图的唯一记录：
 {mine}
 
-Pick up from the artifacts. If `out/oof.npy` already scores well, protect it —
-re-deriving what you had is the one thing that would make this restart a net
-loss. {left:.0f} minutes remain.
+从现有 artifact 继续。如果 `out/oof.npy` 已经表现良好，先保护它；重新推导
+已有成果会让这次重启变成净损失。剩余 {left:.0f} 分钟。
 """
 
 
@@ -99,6 +116,8 @@ def reap_workspace_processes(ws: Path) -> int:
     """
     killed = 0
     root = str(ws.resolve())
+    if not Path("/proc").is_dir():
+        return 0
     for pid in os.listdir("/proc"):
         if not pid.isdigit() or int(pid) == os.getpid():
             continue
@@ -155,6 +174,21 @@ def opts(solver: str, ws: Path, args, budget: Budget, trace: Tracer,
         # while the harness counter sat at 0/3 and the PreToolUse gate on the
         # MCP tool never fired once.
         cmd = str((input_data.get("tool_input") or {}).get("command", ""))
+        if args.mode == "clean-benchmark" and re.search(
+                r"kaggle\s+(competitions|c)\s+(submissions|leaderboard)",
+                cmd, re.I):
+            evidence.taint_process(
+                ws, solver,
+                "attempted to read Kaggle audit data in clean-benchmark mode",
+                attempted_action=cmd,
+            )
+            trace.log("forbidden_audit_read", solver=solver, tool="Bash")
+            return {"hookSpecificOutput": {
+                "hookEventName": "PreToolUse", "permissionDecision": "deny",
+                "permissionDecisionReason":
+                    "Clean-benchmark mode seals Kaggle submissions and the "
+                    "leaderboard from solvers. This route is now tainted; use "
+                    "only the frozen local evaluator."}}
         if re.search(r"kaggle\s+(competitions|c)\s+submit", cmd):
             return {"hookSpecificOutput": {
                 "hookEventName": "PreToolUse", "permissionDecision": "deny",
@@ -198,6 +232,22 @@ def opts(solver: str, ws: Path, args, budget: Budget, trace: Tracer,
                         f"parent's setting rather than indexing into it."}}
         return {}
 
+    async def gate_web(input_data, tool_use_id, context):
+        if args.mode != "clean-benchmark":
+            return {}
+        evidence.taint_process(
+            ws, solver,
+            "attempted external web access in clean-benchmark mode",
+            attempted_action=str(input_data.get("tool_input", "")),
+        )
+        trace.log("forbidden_audit_read", solver=solver,
+                  tool=input_data.get("tool_name"))
+        return {"hookSpecificOutput": {
+            "hookEventName": "PreToolUse", "permissionDecision": "deny",
+            "permissionDecisionReason":
+                "Clean-benchmark mode uses only competition materials already "
+                "fetched by the harness. This route is now tainted."}}
+
     async def trace_tool(input_data, tool_use_id, context):
         # 200 chars used to be the cap, which put the interesting half of every
         # long Bash command out of reach. The evaluator reads this file to
@@ -226,7 +276,9 @@ def opts(solver: str, ws: Path, args, budget: Budget, trace: Tracer,
         max_turns=args.max_turns,
         hooks={"PreToolUse": [HookMatcher(matcher="mcp__ioai__kaggle_submit",
                                           hooks=[gate_submit]),
-                              HookMatcher(matcher="Bash", hooks=[gate_bash])],
+                              HookMatcher(matcher="Bash", hooks=[gate_bash]),
+                              HookMatcher(matcher="WebSearch", hooks=[gate_web]),
+                              HookMatcher(matcher="WebFetch", hooks=[gate_web])],
                "PostToolUse": [HookMatcher(hooks=[trace_tool])]},
     )
 
@@ -399,16 +451,16 @@ async def watchdog_turn(client, solver: str, drainer, args, trace: Tracer) -> No
 
 
 NUDGE = """
-Two rounds have now produced no new or changed file under your `out/` and no
-fact on the board. That is the shape of being stuck, not of thinking hard.
+连续两轮没有在 `out/` 下新增或修改任何文件，也没有向事实板发布新事实。
+这是卡住的表现，不是深入思考。
 
-Drop whatever the current attempt is. If it is a long-running job, kill it — a
-run that has told you nothing in two rounds will not start now. Then take the
-cheapest step that produces something a script can read: `out/oof.npy` scored by
-`native/scripts/evaluate.py`, or `out/submission.csv`, or a `failure` fact
-saying concretely what does not work so nobody else spends time on it.
+停止当前尝试。如果有长任务仍在运行，就终止它；连续两轮没有提供信息的任务，
+现在也不会突然变好。然后选择成本最低、能让脚本读取到结果的一步：
+生成可由 `native/scripts/evaluate.py` 计分的 `out/oof.npy`，生成
+`out/submission.csv`，或发布一条 `failure`，明确说明什么不工作，避免
+别人重复浪费时间。
 
-A worse candidate that exists beats a better one that does not.
+一个真实存在但较弱的候选，胜过一个只存在于设想中的更强候选。
 """
 
 
@@ -423,10 +475,11 @@ async def run_solver(solver: str, ws: Path, args, budget: Budget,
     much less than the capacity it gets back.
     """
     n = peers_n
-    peers = ("You are the only solver on this problem." if n == 1 else
-             f"Your working directory is yours alone; {n} solvers are working "
-             f"on this problem in parallel, none of them told what to do.")
+    peers = ("你是这道题唯一的 solver。" if n == 1 else
+             f"你的工作目录只属于你；共有 {n} 个 solver 并行解决这道题，"
+             "没有任何一个被预先指定路线。")
     append = CONTRACT.format(slug=args.slug, peers=peers,
+                             mode_contract=mode_contract(args),
                              board=(BOARD_SOLO if n == 1
                                     else BOARD_MULTI.format(n=n)),
                              budget=budget_line(budget),
@@ -557,6 +610,8 @@ async def run_solver(solver: str, ws: Path, args, budget: Budget,
                           flush=True)
 
                     promote_all(ws, [solver], trace)
+                    publish_results(ws, ALL_SOLVERS, trace,
+                                    disclosure=args.result_disclosure)
                     if solver in HUNG:
                         # The watchdog could not reach this session at all.
                         raise RuntimeError("session unreachable — interrupt "
@@ -577,129 +632,111 @@ async def run_solver(solver: str, ws: Path, args, budget: Budget,
     print(f"[{solver}] out of lives after {args.max_lives} sessions", flush=True)
 
 
-EVALUATOR = """You own measurement for this run, and nothing else. You are not
-solving the task, you are not judging whether anyone's approach is any good, and
-you are not exploring the data for its own sake.
+EVALUATOR = """你只负责本轮的测量体系，不负责其他工作。你不解题，不评价任何
+solver 的路线是否优秀，也不为探索本身而浏览数据。
 
-The job has two parts. First, once: compile the ruler. Then, for the rest of the
-run: decide what gets submitted, when the harness queues a candidate for you.
-Between the two you have nothing to do — that is expected.
+工作分两部分。第一部分只做一次：编译统一标尺。第二部分持续到运行结束：当
+harness 将候选送来时，决定提交哪个、何时提交。两部分之间没有任务是正常的。
 
-Start with the ruler, and be quick about it: the solvers are working without it
-until it exists. Investigate the data only as far as you need to pin down the
-metric and a sound split. The deterministic reconnaissance has already run and
-its findings are in `recon.md` and on the board, so do not repeat it — hunting
-for leaks and duplicate frames is not your job.
+先尽快完成标尺；在它生成前，solver 都无法统一计分。只研究到足以确定 metric
+和可靠 split 的程度。确定性侦察已经完成，结果在 `recon.md` 和事实板中，
+不要重复做；寻找泄漏或重复帧不是你的职责。
 
-Two artifacts, in the workspace root ({ws}):
+在 workspace 根目录（{ws}）生成两个 artifact：
 
-1. `metric.py` — the official metric of `{slug}`, exposing
-   `def score(y_true, y_pred) -> float | dict`. Before you declare it finished,
-   self-test it on synthetic labels whose correct value you worked out by hand,
-   and show that test. A metric that is subtly wrong is worse than no metric:
-   everything downstream is measured with it and nothing will notice.
+1. `metric.py`：`{slug}` 的官方 metric，暴露
+   `def score(y_true, y_pred) -> float | dict`。完成前必须用一组手算出正确值的
+   合成标签自测，并展示该测试。一个细微错误的 metric 比没有 metric 更危险，
+   因为所有下游结果都会被它错误测量而不自知。
 
-   Corroborate the definition — do not just transcribe the evaluation page.
-   Mirrored competitions sometimes ship Kaggle's unfilled page template, which
-   *demonstrates* a metric and a submission format with example text; a page
-   like that reads as specific and confident while describing a different
-   competition entirely. `kaggle_overview` flags the boilerplate it can detect,
-   but the check is a heuristic. Whatever the page says, verify it against
-   `sample_submission.csv`, the actual data, and what the task obviously is. If
-   the page and the data disagree, the data wins — say so on the facts board.
+   必须交叉验证定义，不能只抄 evaluation 页面。镜像竞赛有时保留 Kaggle 未
+   填写的模板页面，其中用示例文字演示另一个 metric 和提交格式；它看起来
+   具体自信，却可能完全不属于本题。`kaggle_overview` 会标记可识别的模板，
+   但只是启发式检查。无论页面怎么写，都要与 `sample_submission.csv`、实际
+   数据和题目显然要求相互核对。页面与数据冲突时，以数据为准，并在事实板说明。
 
-2. `folds.json` — the split every candidate in this run is scored on. How to cut
-   it is your call and depends entirely on this task, so load the playbook
-   rather than working from first principles:
+2. `folds.json`：本轮所有候选共用的唯一计分划分。怎么切完全取决于本题，
+   因此先加载 playbook，不要从零猜：
 
        skill_load(name="validation-split")
 
-   It covers the file's contract, how to pick k against your training budget,
-   and which structures in the data a shuffled split would leak through. The
-   harness insists on three things only: the file is well formed
-   (`{py} -m native.scripts.checkfolds --workspace {ws}`), it covers exactly the
-   evaluation units, and it is never re-cut once anything has been scored on it.
+   它说明文件契约、如何结合训练预算选择 k，以及哪些数据结构会被随机 split
+   泄漏。harness 只强制三点：文件合法
+   （`{py} -m native.scripts.checkfolds --workspace {ws}`）、恰好覆盖所有评估
+   单元、并且一旦有候选在其上计分就永不重切。
 
-   Post the scheme and your reasoning to the board when it is frozen. Every
-   number in this run comes from it, so everyone should know what it is.
+   冻结后，把划分方案和理由发布到事实板。本轮所有数字都来自它，因此每个
+   solver 都必须知道它的含义。
 
-If the shipped materials genuinely do not pin the metric down, do NOT stall
-trying to prove it. Implement the most defensible reading, state the assumption
-at the top of `metric.py`, post it to the facts board as a `data` fact, and
-finish. A frozen, documented, slightly-uncertain ruler that everyone shares beats
-no ruler at all — and an unresolved question on the board is something the
-solvers can act on, whereas your silence is not.
+如果题目材料确实无法唯一确定 metric，不要为了证明它而卡住。实现最可信的
+解释，在 `metric.py` 顶部明确写出假设，以 `data` 事实发布到事实板，然后
+结束这一阶段。一个冻结、记录完整但略有不确定的共享标尺，胜过没有标尺；
+事实板上的未决问题至少能让 solver 采取行动，而沉默不能。
 
-Then report what you built and wait. Review requests arrive as new messages.
+完成后报告你构建的内容并等待。review 请求会作为新消息到达。
 """
 
 
 REVIEW = """
-A candidate is queued for submission and the decision is yours. The allowance is
-a handful for the whole team and does not renew, so a slot spent badly is gone.
+现在有一个候选等待提交，由你做最终判断。全队每天只有少量且不会恢复的名额，
+错误使用一次就永久损失一次。
 
-You are the right one to hold this because you are the only agent here with no
-candidate of its own. When the solvers held it, all three bought insurance
-inside four minutes and the best model of the run — twelve minutes later — had
-nothing left to travel on.
+你适合持有这个闸门，因为你是唯一没有自己候选的 agent。过去让 solver 自己
+决定时，三条路线四分钟内都选择“买保险”，而第十二分钟出现的全轮最佳模型
+已经没有名额可用。
 
-The harness has already checked what a script can check: quota, throttling, and
-that this candidate has the best score on the shared folds. What it cannot check
-is whether this submission is *valid for this competition*, and whether spending
-a slot now is better than waiting for the run to improve on it.
+harness 已检查脚本可以判断的内容：配额、节流，以及该候选是否在共享 folds
+上得分最高。脚本无法判断的是：submission 对本竞赛是否真正合法，以及现在
+花名额是否优于继续等待改进。
 
     candidate:  {cand}
     workspace:  {ws}
     files:      {cand}/out/submission.csv, {cand}/out/oof.npy{extra}
 
-The mechanical checks have run. They are heuristics written without knowing this
-competition's rules, so treat them as observations to adjudicate, not findings:
+机械检查结果如下。它们是在不知道本题规则时写下的启发式检查，因此只能作为
+需要你裁决的观察，不能直接当结论：
 
-    fatal (bad under any rules):  {fatal}
-    warnings (depends on rules):  {warn}
+    fatal（任何规则下都错误）： {fatal}
+    warnings（取决于规则）：     {warn}
 
-A warning is not a defect until you say it is. The last run's warnings were
-"contains negative values" and "no sample_submission to compare against" — on
-that task -1 was the background label and the mirror simply shipped no sample,
-so both were correct observations and neither was a problem.
+warning 只有经过你的判断才是缺陷。上轮出现过 "contains negative values" 和
+"no sample_submission to compare against"；那道题中 -1 本来就是背景标签，
+而镜像确实没有 sample submission，所以两条观察都正确，却都不是问题。
 
-ANYTHING ABOUT KAGGLE, ASK KAGGLE. `mcp__ioai__kaggle_kernel_status` and
-`mcp__ioai__kaggle_submissions` answer authoritatively in one call. Do not
-settle a question about the world by parsing `trace.jsonl`: it records what our
-agents asked for, not what happened, it does not see work the harness itself
-did, and a `grep` over it will happily match your own earlier commands echoed
-back. On the timed-deps run this exact mistake held a candidate for twelve
-minutes — "zero push calls in the entire run", re-confirmed three times, each
-re-reading raising confidence without adding information — while the kernel sat
-COMPLETE on Kaggle, pushed by the harness. Absence of evidence in a log we write
-is not evidence of absence. One status call would have settled it.
+关于 Kaggle 的任何问题，去问 Kaggle。`mcp__ioai__kaggle_kernel_status` 和
+`mcp__ioai__kaggle_submissions` 一次调用就能给出权威答案。不要靠解析
+`trace.jsonl` 来判断世界发生了什么：它记的是我们的 agent 请求过什么，不是实际
+发生了什么；它看不见 harness 自己做的事；而且 grep 会把你自己早先的命令原样匹配
+回来。timed-deps 那一轮正是栽在这里 —— "整个 run 零次 push"，反复确认三次，每
+读一遍信心更强却没有新增任何信息，而那个 kernel 早已在 Kaggle 上 COMPLETE，是
+harness 推上去的。我们自己写的日志里没有证据，不等于事情没发生。一次状态查询就
+能了结。
 
-Two things are yours:
+你负责两件事：
 
-VALIDITY. Read the organisers' own grading code if you have it, and check what
-voids a submission silently: value ranges, encoding, id alignment, row order,
-units, whether a column means what its name suggests. On the chicken task a
-single negative pixel zeroed an entire submission, and only the grading code
-said so.
+VALIDITY：若有主办方 grading code，就直接阅读，并检查所有可能让 submission
+被静默判零的条件：数值范围、编码、ID 对齐、行顺序、单位，以及列名是否真的
+表达其表面含义。Chicken 题中只要出现一个负像素，整份提交就会被判零，而这点
+只有 grading code 写明。
 
-TIMING. {left} slots remain and {elapsed:.0f} of {total:.0f} minutes are gone.
-Holding a slot back is right when the run is young and clearly still improving;
-it is wrong once time is short, because an unspent slot scores nothing. Do not
-re-judge the model — that is measured, and this is already the best-scoring
-candidate.
+TIMING：剩余 {left} 个名额，{total:.0f} 分钟窗口已过去 {elapsed:.0f} 分钟。
+运行早期且仍明显改进时保留名额是合理的；时间将尽时继续保留就不合理，因为
+未使用名额得分为零。不要重新评价模型能力：模型已经被测量，这就是当前得分
+最高候选。
 
-Write `review/{cand}.json` — exactly `{{"verdict": "APPROVE"|"HOLD"|"REJECT",
-"reason": "<one line>"}}`.
+写入 `review/{cand}.json`，内容必须严格为
+`{{"verdict": "APPROVE"|"HOLD"|"REJECT", "reason": "<一句话>"}}`。
 
-    APPROVE  send it
-    HOLD     valid, but worth waiting for something better
-    REJECT   broken; say specifically what, so the solver can fix it
+    APPROVE  允许发送
+    HOLD     文件合法，但值得等待更好候选
+    REJECT   文件有问题；明确指出问题，让 solver 修复
 
-Then post one fact to the board: `format` if you found a validity problem
-everyone should avoid, otherwise `claim` describing what you checked.
+然后在事实板发布一条事实：若发现所有路线都应避免的合法性问题，用 `format`；
+否则用 `claim` 说明你检查了什么。
 
-Be quick — the submitter proceeds on the mechanical checks alone if you take too
-long, which wastes your judgement rather than using it.
+请快速完成。competition 模式下若超时，submitter 会退化到纯机械检查；这会让
+你的判断失去作用。clean-benchmark 模式不会使用超时降级，必须得到你的明确
+APPROVE 才能进入 clean LKG。
 """
 
 
@@ -744,15 +781,18 @@ async def review_loop(ws: Path, args, budget: Budget, trace: Tracer) -> None:
             trace.log("review_error", candidate=cand, err=f"{type(e).__name__}: {e}")
 
 
-def integrity_check(ws: Path, candidate: str) -> dict:
+def integrity_check(ws: Path, candidate: str, *, require_sample_locality: bool = False) -> dict:
     """Provenance is fatal — a file that moved after scoring makes the score a
     lie. Order-dependence is a warning: ordered data is legitimate, exploiting
     the ordering is not, and only someone who knows the task can tell which."""
     from native.scripts.integrity import (check_order_dependence,
-                                          check_provenance)
+                                          check_provenance,
+                                          check_sample_locality)
     try:
-        return {"fatal": check_provenance(ws, candidate),
-                "warnings": check_order_dependence(ws, candidate)}
+        locality_fatal, locality_warn = check_sample_locality(
+            ws, candidate, required=require_sample_locality)
+        return {"fatal": check_provenance(ws, candidate) + locality_fatal,
+                "warnings": check_order_dependence(ws, candidate) + locality_warn}
     except Exception as e:  # noqa: BLE001
         return {"fatal": [], "warnings": [f"integrity check failed: {e}"]}
 
@@ -790,7 +830,7 @@ async def run_evaluator(ws: Path, args, budget: Budget, trace: Tracer) -> None:
     print("[evaluator] compiling metric.py + folds.json", flush=True)
     async with ClaudeSDKClient(options=o) as client:
         REVIEWER["client"] = client
-        await client.query("Compile the ruler now, then report and wait for review requests.")
+        await client.query("现在编译统一标尺；完成后报告结果，并等待 review 请求。")
         drainer = asyncio.create_task(drain(client, "evaluator", budget, trace))
         watch = asyncio.create_task(
             watchdog_turn(client, "evaluator", drainer, args, trace))
@@ -1248,18 +1288,111 @@ async def score_watcher(ws: Path, args, budget: Budget, trace: Tracer) -> None:
                 subprocess.run,
                 [sys.executable, "-m", "native.scripts.promote", "--confirm",
                  p["candidate"], "--lb", str(hit["score"]),
+                 "--submitted-snapshot", p["snapshot_path"],
+                 "--submission-sha256", p["submission_sha256"],
                  "--workspace", str(ws)],
                 **{"cwd": str(ROOT), "capture_output": True, "text": True})
+            manifest = Path("evidence") / "candidates" / f"{p['candidate']}.json"
+            reveal = evidence.record_reveal(ws, {
+                "candidate": p["candidate"],
+                "candidate_manifest": str(manifest),
+                "candidate_manifest_sha256": (
+                    evidence.sha256_file(ws / manifest)
+                    if (ws / manifest).exists() else None
+                ),
+                "local_score": p["local"],
+                "leaderboard_score": hit["score"],
+                "gap": round(gap, 8),
+                "submission_ref": hit["ref"],
+                "submitted_snapshot": p["snapshot_path"],
+                "submission_sha256": p["submission_sha256"],
+                "mode": args.mode,
+                "fed_back_to_solvers": args.mode == "competition",
+            })
             verdict = ("local is conservative — trust it" if gap >= -0.002 else
                        "LOCAL IS OPTIMISTIC — stop choosing on out-of-fold "
                        "scores alone")
             print(f"  [confirmed] {p['candidate']} local {p['local']:.5f} -> "
                   f"leaderboard {hit['score']:.5f} (gap {gap:+.5f})", flush=True)
-            facts.board().post(
-                "result", f"{p['candidate']}: local {p['local']:.5f} -> "
-                          f"leaderboard {hit['score']:.5f}, gap {gap:+.5f}. "
-                          f"{verdict}."[:300], src="harness")
+            if args.mode == "competition":
+                facts.board().post(
+                    "result", f"{p['candidate']}: local {p['local']:.5f} -> "
+                              f"leaderboard {hit['score']:.5f}, gap {gap:+.5f}. "
+                              f"{verdict}."[:300], src="harness",
+                    evidence_refs=[str(reveal.relative_to(ws))])
+            else:
+                trace.log("reveal_withheld", candidate=p["candidate"],
+                          receipt=str(reveal))
 REVIEW_Q: asyncio.Queue = asyncio.Queue()
+
+
+def promote_clean_after_review(ws: Path, cand: str, trace: Tracer) -> tuple[dict | None, str]:
+    """Turn an explicit evaluator APPROVE into a hash-bound clean LKG entry."""
+    review_path = ws / "review" / f"{cand}.json"
+    try:
+        review = json.loads(review_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return None, f"clean review is unreadable: {exc}"
+    if str(review.get("verdict", "")).upper() != "APPROVE":
+        return None, "clean promotion requires an explicit evaluator APPROVE"
+
+    post_review = integrity_check(ws, cand, require_sample_locality=True)
+    if post_review["fatal"]:
+        return None, "post-review integrity failed: " + "; ".join(post_review["fatal"])
+
+    from native.scripts.integrity import evidence_path, record
+    previous = {}
+    manifest_path = evidence_path(ws, cand)
+    if manifest_path.is_file():
+        previous = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest = record(ws, cand, previous.get("score"))
+
+    body = {
+        "schema_version": 1,
+        "candidate": cand,
+        "proposer": cand,
+        "reviewer": "evaluator",
+        "evidence_tier": "clean_oof",
+        "decision": "promote",
+        "prediction_sha256": manifest.get("oof"),
+        "split_sha256": manifest.get("folds"),
+        "metric_sha256": manifest.get("metric"),
+        "candidate_manifest": str(manifest_path.relative_to(ws)),
+        "candidate_manifest_sha256": evidence.sha256_file(manifest_path),
+        "evaluator_review": str(review_path.relative_to(ws)),
+        "evaluator_review_sha256": evidence.sha256_file(review_path),
+        "run_contract_sha256": manifest.get("run_contract"),
+        "sample_locality_receipt_sha256": manifest.get("sample_locality_receipt"),
+        "reason": " ".join(str(review.get("reason", "")).split())[:500],
+    }
+    digest = hashlib.sha256(evidence.canonical(body)).hexdigest()
+    body["receipt_sha256"] = digest
+    receipt = ws / "evidence" / "clean_reviews" / f"{cand}-{digest[:16]}.json"
+    if receipt.exists():
+        if json.loads(receipt.read_text(encoding="utf-8")) != body:
+            return None, f"clean review receipt collision: {receipt}"
+    else:
+        evidence.write_json(receipt, body)
+
+    run = subprocess.run(
+        [sys.executable, "-m", "native.scripts.promote",
+         "--candidate", cand, "--tier", "clean",
+         "--clean-receipt", str(receipt),
+         "--proposer", cand, "--reviewer", "evaluator",
+         "--workspace", str(ws)],
+        cwd=str(ROOT), capture_output=True, text=True,
+    )
+    line = (run.stdout or run.stderr).strip().splitlines()[-1:] or [""]
+    trace.log("clean_promote", candidate=cand, receipt=str(receipt),
+              returncode=run.returncode, out=line[0][:300])
+    if run.returncode != 0:
+        return None, f"clean promotion failed: {line[0][:240]}"
+    state_path = ws / "LKG" / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    clean = state.get("clean")
+    if not clean or clean.get("candidate") != cand:
+        return None, "clean promotion did not select the reviewed candidate"
+    return clean, f"clean receipt {receipt.relative_to(ws)}"
 
 
 async def clear_for_submission(ws: Path, cand: str, args, trace: Tracer,
@@ -1281,7 +1414,9 @@ async def clear_for_submission(ws: Path, cand: str, args, trace: Tracer,
     one, NaNs, a shape that contradicts a sample submission that exists.
     """
     mech = await asyncio.to_thread(format_check, ws, cand)
-    integ = await asyncio.to_thread(integrity_check, ws, cand)
+    integ = await asyncio.to_thread(
+        integrity_check, ws, cand,
+        require_sample_locality=args.mode == "clean-benchmark")
     mech["fatal"] = list(mech.get("fatal", [])) + integ["fatal"]
     mech["warnings"] = list(mech.get("warnings", [])) + integ["warnings"]
     mech["ok"] = not mech["fatal"]
@@ -1292,6 +1427,8 @@ async def clear_for_submission(ws: Path, cand: str, args, trace: Tracer,
                 "format", f"{cand} not submitted — {'; '.join(mech.get('fatal', []))}"
                           [:300], src="harness")
             return False, f"fatal format problem: {mech.get('fatal')}"
+        if args.mode == "clean-benchmark":
+            return False, "clean benchmark requires independent evaluator approval"
         return True, "mechanical checks only (no evaluator)"
 
     p = ws / "review" / f"{cand}.json"
@@ -1316,6 +1453,8 @@ async def clear_for_submission(ws: Path, cand: str, args, trace: Tracer,
             # reasonable holds are a zero. Every gate that can refuse needs a
             # point past which it cannot — gate 1 had one, gate 3 did not and
             # cost a run, and this had none either.
+            if args.mode == "clean-benchmark":
+                return False, f"clean benchmark requires APPROVE; evaluator HOLD: {reason}"[:160]
             if frac >= args.submit_fallback_frac:
                 trace.log("hold_overridden", candidate=cand, frac=round(frac, 2))
                 facts.board().post(
@@ -1345,6 +1484,9 @@ async def clear_for_submission(ws: Path, cand: str, args, trace: Tracer,
     if not mech.get("ok"):
         return False, (f"evaluator silent for {args.review_timeout:.0f}s and the "
                        f"file has a fatal problem: {mech.get('fatal')}")
+    if args.mode == "clean-benchmark":
+        return False, (f"clean benchmark requires explicit APPROVE; evaluator "
+                       f"silent for {args.review_timeout:.0f}s")
     return True, (f"evaluator did not answer in {args.review_timeout:.0f}s; "
                   f"sent on mechanical checks alone")
 
@@ -1372,7 +1514,10 @@ def send_candidate(ws: Path, candidate: str, csv: Path, msg: str, ctx,
     if SUBMIT_MODE["mode"] == "csv":
         return str(R.kaggle_submit({"csv_path": str(csv), "message": msg}, ctx))
 
-    kdir = ws / candidate / "out" / "kernel"
+    # `csv` lives in the immutable LKG snapshot. The kernel must come from that
+    # same snapshot; reading the solver's live directory here could submit code
+    # different from the artifact that passed the gates.
+    kdir = csv.parent / "kernel"
     if not (kdir / "kernel-metadata.json").exists():
         # Tell them. The harness knew for two hours why it could not submit and
         # kept it in a log nobody reads; the solvers went on polishing a score
@@ -1499,17 +1644,22 @@ async def submitter(ws: Path, args, names: list[str], budget: Budget,
 
         scored = scored_candidates(ws, names)
         frac = 1.0 - max(budget.remaining(), 0) / max(budget.deadline_s, 1)
-        # `best` used to be read from LKG/state.json, which only `promote_all`
-        # writes and which only runs at a round boundary. Three solvers spent
-        # twenty-four minutes inside their first round — max_turns is 250 — so
-        # no boundary ever came, LKG stayed empty, and this loop concluded "no
-        # scored candidate yet" every sixty seconds while the line above had
-        # already measured solver_a at 0.914. Choose from what we just computed;
-        # LKG is a fallback for the candidate whose files have since moved on.
-        best = best_of(ws, scored)
-        if best is None and (ws / "LKG" / "state.json").exists():
-            best = (json.loads((ws / "LKG" / "state.json").read_text())
-                    or {}).get("local")
+        st = json.loads((ws / "LKG" / "state.json").read_text()) \
+            if (ws / "LKG" / "state.json").exists() else {}
+        # Candidate search always happens in the development channel. In clean
+        # mode the selected candidate enters the clean channel only after an
+        # explicit evaluator APPROVE; otherwise clean mode would either submit
+        # unreviewed evidence or wait forever on an empty clean LKG.
+        best = (st or {}).get("development") or (st or {}).get("local")
+        if best is None:
+            # LKG is written by promote_all, which runs at a round boundary.
+            # Three solvers once spent twenty-four minutes inside their first
+            # round — max_turns is 250 — so no boundary came, LKG stayed empty,
+            # and this loop answered "no scored candidate yet" every sixty
+            # seconds while the line above had already measured solver_a at
+            # 0.914. A snapshot is better evidence when there is one; having
+            # none is not a reason to sit still.
+            best = best_of(ws, scored)
         ok, why = should_submit(
             n_scored=len(scored), frac=frac, best=best, sent_best=sent_best,
             sent=budget.submissions, allowance=budget.max_submissions,
@@ -1521,19 +1671,56 @@ async def submitter(ws: Path, args, names: list[str], budget: Budget,
             # monitor showed `blocked: []` the whole time.
             note_refusal(why, trace, frac)
             continue
-        csv = ws / best["candidate"] / "out" / "submission.csv"
-        if not csv.exists():
+        source_snapshot = Path(best.get("path") or "")
+        if source_snapshot.name:
+            try:
+                from native.scripts.promote import verify_snapshot
+                snapshot_problems = verify_snapshot(source_snapshot)
+            except Exception as exc:  # noqa: BLE001
+                snapshot_problems = [f"snapshot audit crashed: {exc}"]
+            if snapshot_problems:
+                note_refusal("; ".join(snapshot_problems), trace, frac)
+                continue
+        else:
+            # No snapshot yet — the candidate was chosen from a live score.
+            source_snapshot = ws / best["candidate"]
+        if not (source_snapshot / "out" / "submission.csv").exists():
             note_refusal(f"{best['candidate']} has no submission.csv", trace, frac)
             continue
 
-        msg = (f"harness: {best['candidate']} OOF {best['mean']:.5f} "
-               f"±{best['std']:.3f} ({len(scored)} scored, {why})")
         cand = best["candidate"]
         ok, note = await clear_for_submission(ws, cand, args, trace, frac)
         if not ok:
             print(f"  [submit] {cand} held back — {note}", flush=True)
             trace.log("submit_blocked", candidate=cand, reason=note)
             continue
+
+        if args.mode == "clean-benchmark":
+            clean_best, clean_note = await asyncio.to_thread(
+                promote_clean_after_review, ws, cand, trace)
+            if clean_best is None:
+                print(f"  [submit] {cand} clean promotion blocked — {clean_note}",
+                      flush=True)
+                trace.log("submit_blocked", candidate=cand, reason=clean_note)
+                continue
+            best = clean_best
+            note = f"{note}; {clean_note}"
+
+        snapshot_path = Path(best.get("path", ""))
+        try:
+            snapshot_problems = verify_snapshot(snapshot_path)
+        except Exception as exc:  # noqa: BLE001
+            snapshot_problems = [f"snapshot audit crashed: {exc}"]
+        if snapshot_problems:
+            trace.log("submit_blocked", candidate=cand,
+                      reason="; ".join(snapshot_problems))
+            continue
+        csv = snapshot_path / "out" / "submission.csv"
+        if not csv.exists():
+            continue
+        submission_sha256 = evidence.sha256_file(csv)
+        msg = (f"harness: {best['candidate']} OOF {best['mean']:.5f} "
+               f"±{best['std']:.3f} ({len(scored)} scored, {why})")
 
         ctx = R.Ctx(workspace=ws, slug=args.slug, budget=budget, trace=trace)
         try:
@@ -1546,7 +1733,9 @@ async def submitter(ws: Path, args, names: list[str], budget: Budget,
         # Remember what we sent and what we thought it was worth, so the score
         # coming back can be compared against it.
         PENDING.append({"candidate": best["candidate"], "local": best["mean"],
-                        "message": msg, "at": time.time()})
+                        "message": msg, "at": time.time(),
+                        "snapshot_path": str(snapshot_path),
+                        "submission_sha256": submission_sha256})
         print(f"  [submit] {msg} -> {res[:120]}", flush=True)
         trace.log("harness_submit", candidate=best["candidate"],
                   mean=best["mean"], scored=len(scored), result=res[:300])
@@ -1598,7 +1787,8 @@ def claim_of(ws: Path, solver: str) -> str:
     return latest
 
 
-def publish_results(ws: Path, names: list[str], trace: Tracer) -> None:
+def publish_results(ws: Path, names: list[str], trace: Tracer,
+                    disclosure: str = "live") -> None:
     """Tell everyone what each direction has actually been worth.
 
     Which approaches have oil in them is too useful to withhold — a solver
@@ -1616,6 +1806,10 @@ def publish_results(ws: Path, names: list[str], trace: Tracer) -> None:
     scored = scored_candidates(ws, names)
     if not scored:
         return
+    if disclosure == "none":
+        return
+    if disclosure == "after-first" and len(scored) < len(names):
+        return
     changed = any(abs(scored[k] - _PUBLISHED.get(k, -1)) > 1e-6 for k in scored)
     if not changed:
         return
@@ -1624,8 +1818,12 @@ def publish_results(ws: Path, names: list[str], trace: Tracer) -> None:
     for k, v in sorted(scored.items(), key=lambda kv: -kv[1]):
         what = (claim_of(ws, k) or k)[:60]
         parts.append(f"{what} → {v:.4f}")
+    refs = [str((Path("evidence") / "candidates" / f"{name}.json"))
+            for name in scored
+            if (ws / "evidence" / "candidates" / f"{name}.json").is_file()]
     facts.board().post("result", "verified on the shared folds: "
-                       + " | ".join(parts), src="harness")
+                       + " | ".join(parts), src="harness",
+                       evidence_refs=refs)
     trace.log("results_published", scores=scored)
 
 
@@ -1650,35 +1848,6 @@ def promote_all(ws: Path, names: list[str], trace: Tracer) -> None:
         if '"PROMOTED"' in line[0]:
             print(f"  [lkg] {line[0][:160]}", flush=True)
         trace.log("promote", candidate=n, out=line[0][:300])
-
-        # Put the measured number on the board. Which directions have oil in
-        # them is the most useful thing anyone here knows, and withholding it
-        # only means the others keep drilling dry holes. It goes out as a
-        # `result`, which solvers cannot post themselves: a score is comparable
-        # only if it came from the shared folds and the frozen metric.
-        try:
-            d = json.loads(line[0])
-        except Exception:  # noqa: BLE001
-            continue
-        if d.get("mean") is None:
-            continue
-        prev = _POSTED.get(n)
-        if prev is not None and abs(prev - d["mean"]) < 1e-9:
-            continue
-        _POSTED[n] = d["mean"]
-        # Seal the files this number came from. Nothing else ties the scored
-        # oof to the submitted csv, so a swap between the two would be silent.
-        try:
-            from native.scripts.integrity import record as _seal
-            _seal(ws, n, d["mean"])
-        except Exception:  # noqa: BLE001
-            pass
-        move = "" if prev is None else f" (was {prev:.4f})"
-        facts.board().post(
-            "result", f"{n} now scores {d['mean']:.4f} +/-{d.get('std', 0):.3f} "
-                      f"on the shared folds{move}. "
-                      f"{'best so far' if d.get('decision') == 'PROMOTED' else 'below the current best'}.",
-            src="harness")
 
 
 def run_recon(ws: Path) -> None:
@@ -1799,7 +1968,8 @@ RUNLOG = """# {slug} — {stamp}
 
 ## Configuration
 solvers {solvers} | deadline {deadline:.0f} min | cost cap ${cap:.0f} | model {model}
-effort {effort} | min_candidates {minc} | submissions allowed {allow}
+effort {effort} | mode {mode} | result disclosure {disclosure}
+min_candidates {minc} | submissions allowed {allow}
 
 ## What happened
 elapsed {elapsed:.0f} min | spent ${spent:.2f} | submissions made {subs}
@@ -1846,6 +2016,7 @@ def write_runlog(ws: Path, args, budget: Budget, trace: Tracer) -> None:
             slug=args.slug, stamp=datetime.datetime.now().isoformat(timespec="minutes"),
             solvers=args.solvers, deadline=args.deadline_min, cap=args.max_cost_usd,
             model=args.model, effort=args.effort, minc=args.min_candidates,
+            mode=args.mode, disclosure=args.result_disclosure,
             allow=budget.max_submissions, elapsed=budget.elapsed() / 60,
             spent=budget.cost_usd, subs=budget.submissions,
             scores=lines or "(no candidate was ever scored)", lb=lb,
@@ -1862,6 +2033,20 @@ def finalize(ws: Path, args, budget: Budget, trace: Tracer) -> None:
     print("\n===== LKG =====\n" + (r.stdout or r.stderr))
     trace.log("final", lkg=r.stdout[:800], submissions=budget.submissions,
               cost=budget.cost_usd)
+    try:
+        from native.scripts.coordination import audit as coordination_audit
+        coordination = coordination_audit(ws, ALL_SOLVERS)
+        trace.log("coordination_audit", valid=coordination["valid"],
+                  interpretation=coordination["interpretation"],
+                  errors=coordination["errors"])
+        print("[coordination] "
+              f"{coordination['interpretation']} | valid={coordination['valid']} "
+              f"| edges={len(coordination['collaboration_edges'])}", flush=True)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[coordination] audit failed: {type(exc).__name__}: {exc}",
+              flush=True)
+        trace.log("coordination_audit_failed",
+                  err=f"{type(exc).__name__}: {exc}")
     if budget.submissions == 0:
         print("!! no submission was made — LKG above is the fallback to push by hand")
     # Solvers background their training and their watchers, which outlive the
@@ -1926,8 +2111,13 @@ def claim_slug(ws: Path, slug: str) -> None:
 
 async def run(args) -> None:
     _load_dotenv()
+    if args.result_disclosure == "auto":
+        args.result_disclosure = (
+            "after-first" if args.mode == "clean-benchmark" else "live"
+        )
+    suffix = f"-{args.run_id}" if args.run_id else ""
+    ws = ROOT / "workspace" / f"hearsay-{args.slug}{suffix}"
     START["t"] = time.time()
-    ws = ROOT / "workspace" / f"hearsay-{args.slug}"
     ws.mkdir(parents=True, exist_ok=True)
     claim_slug(ws, args.slug)
     if args.solvers == 1:
@@ -1937,8 +2127,19 @@ async def run(args) -> None:
         # claims its own angle on the board.
         names = [f"solver_{c}" for c in "abcdefgh"[:args.solvers]]
     ALL_SOLVERS[:] = names
+    if (ws / evidence.RUN_CONTRACT).exists() or (ws / "trace.jsonl").exists():
+        raise FileExistsError(
+            f"{ws} has already been started; use a fresh --run-id rather than "
+            "overwriting or resuming sealed evidence"
+        )
     for n in names:
         (ws / n / "out").mkdir(parents=True, exist_ok=True)
+
+    contract = evidence.init_contract(
+        ws, mode=args.mode, slug=args.slug, model=args.model,
+        effort=args.effort, solvers=names, max_cost_usd=args.max_cost_usd,
+        max_submissions=args.max_submissions, deadline_min=args.deadline_min,
+    )
 
     _, limit = submission_mode(args.slug)
     used = submissions_used_today(args.slug)
@@ -1968,7 +2169,7 @@ async def run(args) -> None:
                     max_cost_usd=args.max_cost_usd)
     trace = Tracer(ws / "trace.jsonl")
     facts.init(ws)
-    T.init_ctx(ws, args.slug, budget, trace)
+    T.init_ctx(ws, args.slug, budget, trace, mode=args.mode)
     trace.log("quota", limit=limit, used_today=used, allowance=allowance)
     if allowance == 0:
         print("[boot] !! no submissions left today — this run cannot reach the "
@@ -1976,7 +2177,8 @@ async def run(args) -> None:
 
     print(f"launch hearsay | slug={args.slug} model={args.model} "
           f"solvers={names} effort={args.effort}\nworkspace={ws}")
-    trace.log("launch", slug=args.slug, model=args.model, solvers=names)
+    trace.log("launch", slug=args.slug, model=args.model, solvers=names,
+              mode=args.mode, contract_sha256=contract["contract_sha256"])
 
     QUOTA["budget"] = budget
     bootstrap(ws, args, budget, trace)
@@ -2065,6 +2267,17 @@ async def run(args) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--slug", required=True)
+    ap.add_argument("--run-id", default="",
+                    help="fresh immutable workspace suffix; required to repeat "
+                         "a slug without overwriting earlier evidence")
+    ap.add_argument("--mode", choices=evidence.MODES, default="competition",
+                    help="competition may feed sparse leaderboard calibration "
+                         "back; clean-benchmark seals it from solvers")
+    ap.add_argument("--result-disclosure",
+                    choices=["auto", "live", "after-first", "none"],
+                    default="auto",
+                    help="when evaluator-recomputed local scores reach peers; "
+                         "auto=live in competition, after-first in clean mode")
     ap.add_argument("--model", default=DEFAULT_MODEL)
     ap.add_argument("--effort", default="high",
                     choices=["low", "medium", "high", "xhigh", "max"])
