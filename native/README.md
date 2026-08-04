@@ -141,6 +141,8 @@ the task, and on IOAI it is the kind of thing that gets a submission thrown out.
 
 ## Data synthesis and the ruler
 
+![Data synthesis and the ruler](../docs/data-synthesis.svg)
+
 `chicken_data_synthesis.py` owns one component: what rows go into the fit, and
 which ruler is allowed to say whether they helped. It does not touch the
 estimator. The scaler, Ridge, KNN, log-Ridge, their hyperparameters, the

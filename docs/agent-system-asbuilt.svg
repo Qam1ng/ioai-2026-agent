@@ -1,0 +1,182 @@
+<svg viewBox="0 0 900 1310" width="900" height="1310" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<rect width="900" height="1310" fill="#ffffff"/>
+<defs>
+<marker id="ar" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+<path d="M0 1 L9 5 L0 9 z" fill="#9a9a94"/>
+</marker>
+<marker id="arb" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto">
+<path d="M0 1 L9 5 L0 9 z" fill="#c9c6bb"/>
+</marker>
+</defs>
+
+<text x="40" y="46" font-size="22" fill="#1a1a18">HearSay, as built</text>
+<text x="40" y="70" font-size="13.5" fill="#6b6b66">Four full-power Claude sessions inside a harness they cannot talk their way past</text>
+
+<rect x="40" y="90" width="164" height="26" rx="13" fill="#f1efe8"/>
+<text x="56" y="108" font-size="12.5" fill="#5f5e5a">Claude Code session</text>
+<rect x="216" y="90" width="176" height="26" rx="13" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="232" y="108" font-size="12.5" fill="#5f5e5a">deterministic, no LLM</text>
+<rect x="404" y="90" width="182" height="26" rx="13" fill="#faf8f2" stroke="#c9c6bb" stroke-dasharray="3 3"/>
+<text x="420" y="108" font-size="12.5" fill="#5f5e5a">added on this branch</text>
+
+<!-- ONE COMMAND -->
+<text x="40" y="152" font-size="12.5" fill="#888882">ONE COMMAND &#8212; the only human action</text>
+<rect x="40" y="164" width="820" height="48" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="60" y="194" font-size="12" fill="#2c2c2a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">python -m native.main --mode competition --slug &lt;comp&gt; --solvers 3 --deadline-min 120 --max-cost-usd 100</text>
+
+<!-- BOOT -->
+<text x="40" y="250" font-size="12.5" fill="#888882">BOOT &#8212; all of it deterministic, all of it before any agent starts</text>
+<g font-size="12.5">
+<rect x="40" y="262" width="196" height="66" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="138" y="288" text-anchor="middle" fill="#2c2c2a">read the task</text>
+<text x="138" y="308" font-size="11.5" text-anchor="middle" fill="#7a7a74">once, not four times</text>
+<rect x="248" y="262" width="196" height="66" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="346" y="288" text-anchor="middle" fill="#2c2c2a">fetch and verify data</text>
+<text x="346" y="308" font-size="11.5" text-anchor="middle" fill="#7a7a74">hashed, not assumed</text>
+<rect x="456" y="262" width="196" height="66" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="554" y="288" text-anchor="middle" fill="#2c2c2a">recon.py</text>
+<text x="554" y="308" font-size="11.5" text-anchor="middle" fill="#7a7a74">leaks &#183; duplicates &#183; format</text>
+<rect x="664" y="262" width="196" height="66" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="762" y="288" text-anchor="middle" fill="#2c2c2a">quota and backend</text>
+<text x="762" y="308" font-size="11.5" text-anchor="middle" fill="#7a7a74">CSV or kernel &#183; slots left</text>
+</g>
+<line x1="450" y1="328" x2="450" y2="352" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+
+<rect x="40" y="360" width="820" height="46" rx="10" fill="#f1efe8"/>
+<text x="60" y="380" font-size="13" fill="#2c2c2a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">run_contract.json</text>
+<text x="60" y="398" font-size="11.5" fill="#7a7a74">freezes mode, model, routes, budget, deadline and submit authority. Tampering is detected, not trusted.</text>
+
+<!-- CONCURRENT -->
+<text x="40" y="440" font-size="12.5" fill="#888882">THEN SEVEN THINGS RUN AT ONCE, each its own process and context</text>
+
+<rect x="40" y="452" width="238" height="76" rx="10" fill="#f1efe8"/>
+<text x="60" y="476" font-size="13" fill="#2c2c2a">evaluator</text>
+<text x="60" y="495" font-size="11.5" fill="#7a7a74">compiles the ruler once: metric.py</text>
+<text x="60" y="511" font-size="11.5" fill="#7a7a74">and folds.json, then holds gate 4</text>
+
+<rect x="40" y="538" width="238" height="52" rx="10" fill="#f1efe8"/>
+<text x="60" y="560" font-size="13" fill="#2c2c2a">solver_a</text>
+<text x="60" y="578" font-size="11.5" fill="#7a7a74">no assigned approach, no submit tool</text>
+<rect x="40" y="598" width="238" height="52" rx="10" fill="#f1efe8"/>
+<text x="60" y="620" font-size="13" fill="#2c2c2a">solver_b</text>
+<text x="60" y="638" font-size="11.5" fill="#7a7a74">identical contract, differs in nothing</text>
+<rect x="40" y="658" width="238" height="52" rx="10" fill="#f1efe8"/>
+<text x="60" y="680" font-size="13" fill="#2c2c2a">solver_c</text>
+<text x="60" y="698" font-size="11.5" fill="#7a7a74">division of labour is theirs to negotiate</text>
+
+<rect x="316" y="452" width="252" height="278" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="336" y="476" font-size="13" fill="#2c2c2a">the board</text>
+<text x="336" y="494" font-size="11.5" fill="#7a7a74" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">facts.jsonl</text>
+<text x="336" y="512" font-size="11.5" fill="#7a7a74">append-only, hash-chained, no LLM</text>
+<line x1="336" y1="524" x2="548" y2="524" stroke="#e6e4dc" stroke-width="1"/>
+<g font-size="11.5">
+<text x="336" y="544" fill="#2c2c2a">claim</text><text x="424" y="544" fill="#7a7a74">so others take another angle</text>
+<text x="336" y="564" fill="#2c2c2a">adoption</text><text x="424" y="564" fill="#7a7a74">must point at another route</text>
+<text x="336" y="584" fill="#2c2c2a">conflict</text><text x="424" y="584" fill="#7a7a74">needs explicit resolution</text>
+<text x="336" y="604" fill="#2c2c2a">data</text><text x="424" y="604" fill="#7a7a74">a leak, a duplicate, an anomaly</text>
+<text x="336" y="624" fill="#2c2c2a">format</text><text x="424" y="624" fill="#7a7a74">a submission trap</text>
+<text x="336" y="644" fill="#2c2c2a">failure</text><text x="424" y="644" fill="#7a7a74">what did not work, and why</text>
+<text x="336" y="664" fill="#b4574a">result</text><text x="424" y="664" fill="#7a7a74">evaluator and harness only</text>
+<text x="336" y="684" fill="#b4574a">decision</text><text x="424" y="684" fill="#7a7a74">evaluator only, evidence-bound</text>
+</g>
+<text x="336" y="702" font-size="11" fill="#888882">two layers &#8212; task dies with the</text>
+<text x="336" y="716" font-size="11" fill="#888882">competition, day survives it</text>
+
+<rect x="606" y="452" width="254" height="76" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="626" y="476" font-size="13" fill="#2c2c2a">submitter</text>
+<text x="626" y="495" font-size="11.5" fill="#7a7a74">walks the four gates below and is</text>
+<text x="626" y="511" font-size="11.5" fill="#7a7a74">the only thing that may send</text>
+
+<rect x="606" y="538" width="254" height="76" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="626" y="562" font-size="13" fill="#2c2c2a">reconciler</text>
+<text x="626" y="581" font-size="11.5" fill="#7a7a74">Kaggle's submission count against</text>
+<text x="626" y="597" font-size="11.5" fill="#7a7a74">ours &#183; GPU trespass &#183; orphans &#183; cost</text>
+
+<rect x="606" y="624" width="254" height="86" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="626" y="648" font-size="13" fill="#2c2c2a">score watcher</text>
+<text x="626" y="667" font-size="11.5" fill="#7a7a74">brings the board score back and</text>
+<text x="626" y="683" font-size="11.5" fill="#7a7a74">posts the gap, so a solver learns</text>
+<text x="626" y="699" font-size="11.5" fill="#7a7a74">whether its own numbers can be trusted</text>
+
+<line x1="278" y1="490" x2="312" y2="490" stroke="#c9c6bb" stroke-width="1.2" marker-end="url(#arb)"/>
+<line x1="278" y1="564" x2="312" y2="564" stroke="#c9c6bb" stroke-width="1.2" marker-end="url(#arb)"/>
+<line x1="278" y1="624" x2="312" y2="624" stroke="#c9c6bb" stroke-width="1.2" marker-end="url(#arb)"/>
+<line x1="278" y1="684" x2="312" y2="684" stroke="#c9c6bb" stroke-width="1.2" marker-end="url(#arb)"/>
+<line x1="568" y1="490" x2="602" y2="490" stroke="#c9c6bb" stroke-width="1.2" marker-end="url(#arb)"/>
+<line x1="602" y1="662" x2="572" y2="662" stroke="#c9c6bb" stroke-width="1.2" marker-end="url(#arb)"/>
+
+<!-- DETERMINISTIC LAYER -->
+<text x="40" y="746" font-size="12.5" fill="#888882">THE DETERMINISTIC LAYER &#8212; every constraint that matters is a script, not an instruction</text>
+<rect x="40" y="758" width="820" height="102" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<g font-size="11.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#2c2c2a">
+<text x="60" y="782">folds.py</text><text x="200" y="782">checkfolds.py</text><text x="360" y="782">evaluate.py</text><text x="520" y="782">promote.py</text><text x="680" y="782">check_format.py</text>
+<text x="60" y="806">integrity.py</text><text x="200" y="806">sample_locality.py</text><text x="360" y="806">coordination.py</text><text x="520" y="806">system_benchmark.py</text>
+</g>
+<g font-size="10.5" fill="#7a7a74">
+<text x="60" y="796">the split</text><text x="200" y="796">and its contract</text><text x="360" y="796">scores out/oof.npy</text><text x="520" y="796">no-regression, LKG</text><text x="680" y="796">fatal vs unknown</text>
+<text x="60" y="820">evidence binding</text><text x="200" y="820">permutation, subset</text><text x="360" y="820">who adopted whom</text><text x="520" y="820">equal-budget A/B</text>
+</g>
+<line x1="60" y1="830" x2="840" y2="830" stroke="#e6e4dc" stroke-width="1"/>
+<rect x="52" y="836" width="796" height="18" rx="4" fill="#faf8f2"/>
+<g font-size="11.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+<text x="60" y="850" fill="#2c2c2a">chicken_data_synthesis.py</text>
+<text x="248" y="850" fill="#2c2c2a">ruler_calibration.py</text>
+</g>
+<text x="404" y="850" font-size="10.5" fill="#7a7a74">new on this branch &#8212; what data goes in, and which ruler may say it helped</text>
+
+<!-- GATES -->
+<text x="40" y="894" font-size="12.5" fill="#888882">FOUR SUBMISSION GATES &#8212; and each has a point past which it cannot refuse</text>
+<g font-size="12.5">
+<rect x="40" y="906" width="196" height="98" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="60" y="930" font-size="13" fill="#2c2c2a">1 &#183; the ruler exists</text>
+<text x="60" y="950" font-size="11.5" fill="#7a7a74">and N candidates carry a</text>
+<text x="60" y="966" font-size="11.5" fill="#7a7a74">script-computed score</text>
+<text x="60" y="988" font-size="11" fill="#8a7f5f">past 55%: send the best there is</text>
+
+<rect x="248" y="906" width="196" height="98" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="268" y="930" font-size="13" fill="#2c2c2a">2 &#183; quota</text>
+<text x="268" y="950" font-size="11.5" fill="#7a7a74">must beat what was already</text>
+<text x="268" y="966" font-size="11.5" fill="#7a7a74">sent; half the slots are held</text>
+<text x="268" y="988" font-size="11" fill="#8a7f5f">for the second half of the window</text>
+
+<rect x="456" y="906" width="196" height="98" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="476" y="930" font-size="13" fill="#2c2c2a">3 &#183; mechanical evidence</text>
+<text x="476" y="950" font-size="11.5" fill="#7a7a74">format, hash provenance,</text>
+<text x="476" y="966" font-size="11.5" fill="#7a7a74">order dependence</text>
+<text x="476" y="988" font-size="11" fill="#8a7f5f">only fatal findings block alone</text>
+
+<rect x="664" y="906" width="196" height="98" rx="10" fill="#f1efe8"/>
+<text x="684" y="930" font-size="13" fill="#2c2c2a">4 &#183; the evaluator</text>
+<text x="684" y="950" font-size="11.5" fill="#7a7a74">APPROVE / HOLD / REJECT,</text>
+<text x="684" y="966" font-size="11.5" fill="#7a7a74">given gate 3 as evidence</text>
+<text x="684" y="988" font-size="11" fill="#8a7f5f">90s silence falls back to gate 3</text>
+</g>
+<line x1="236" y1="955" x2="246" y2="955" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+<line x1="444" y1="955" x2="454" y2="955" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+<line x1="652" y1="955" x2="662" y2="955" stroke="#9a9a94" stroke-width="1.2" marker-end="url(#ar)"/>
+
+<!-- FIREWALL -->
+<text x="40" y="1044" font-size="12.5" fill="#888882">EVIDENCE FIREWALL &#8212; the run starts in one of two frozen modes</text>
+<rect x="40" y="1056" width="404" height="90" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="60" y="1080" font-size="13" fill="#2c2c2a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">--mode competition</text>
+<text x="60" y="1101" font-size="11.5" fill="#7a7a74">sparse leaderboard calibration, and only after a</text>
+<text x="60" y="1117" font-size="11.5" fill="#7a7a74">submission has been sealed and sent</text>
+<text x="60" y="1136" font-size="11" fill="#888882">a public score may never promote evidence by itself</text>
+
+<rect x="456" y="1056" width="404" height="90" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<text x="476" y="1080" font-size="13" fill="#2c2c2a" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">--mode clean-benchmark</text>
+<text x="476" y="1101" font-size="11.5" fill="#7a7a74">leaderboard and web withheld from every lineage;</text>
+<text x="476" y="1117" font-size="11.5" fill="#7a7a74">an attempted audit read is permanent taint</text>
+<text x="476" y="1136" font-size="11" fill="#888882">development, clean and public LKG stay separate channels</text>
+
+<!-- OUTPUTS -->
+<text x="40" y="1186" font-size="12.5" fill="#888882">WHAT A RUN LEAVES BEHIND &#8212; inspect these together or not at all</text>
+<rect x="40" y="1198" width="820" height="54" rx="10" fill="#ffffff" stroke="#d3d1c7"/>
+<g font-size="11.5" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" fill="#2c2c2a">
+<text x="60" y="1220">run_contract.json</text><text x="230" y="1220">facts.jsonl</text><text x="360" y="1220">route_coordination.json</text><text x="580" y="1220">evidence/firewall.json</text>
+<text x="60" y="1242">trace.jsonl</text><text x="230" y="1242">evidence/candidates/</text><text x="440" y="1242">&lt;candidate&gt;/out/sample_locality_receipt.json</text>
+</g>
+
+<text x="40" y="1276" font-size="11.5" fill="#888882">A valid CSV without the matching contract, fold hashes, locality receipt and untainted lineage is not a result.</text>
+<text x="40" y="1294" font-size="11.5" fill="#888882" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">python -m native.selftest &#8212; 201 checks, hand-computed</text>
+</svg>

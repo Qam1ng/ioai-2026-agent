@@ -135,6 +135,18 @@ solvers read the task, decide for themselves where they think it is won, and
 claim that angle on a shared board so the others take a different one. The
 fourth compiles the ruler everybody is measured with, then guards the door.
 
+For the whole thing as it actually runs — boot, the seven concurrent tasks, the
+deterministic layer, the four gates and the firewall — see
+[`docs/agent-system-asbuilt.svg`](docs/agent-system-asbuilt.svg):
+
+![HearSay as built](docs/agent-system-asbuilt.svg)
+
+And the data layer this branch adds, from the density-map identity through
+ruler calibration to the gate that rejected its own synthesis
+([`docs/data-synthesis.svg`](docs/data-synthesis.svg)):
+
+![Data synthesis and the ruler](docs/data-synthesis.svg)
+
 Everything that decides anything is a script. The agent that produced a
 candidate never says what it is worth; `evaluate.py` reads its predictions on a
 frozen split and computes the number. Nothing is submitted until four gates
