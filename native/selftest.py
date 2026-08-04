@@ -663,6 +663,11 @@ def test_supervision() -> None:
     check("bypass check tolerates an unreachable API", d, None)
     check("cost overrun caught", rec.cost(19.05, 15.0).kind, "cost-overrun")
     check("cost within cap is quiet", rec.cost(14.0, 15.0), None)
+    # 0 = uncapped: a Max subscription draws no balance, and in the competition
+    # the system must not stop early on money. Every solver on the timed-deps
+    # run halted itself at 33-42 minutes of a 90-minute window.
+    check("an uncapped run never reports a cost overrun",
+          rec.cost(500.0, 0.0), None)
     # The GPU probe reads the real nvidia-smi, so on a box with someone else's
     # job running it reports a genuine trespass and this test would be asserting
     # against the machine rather than the code. Same failure as pointing the
@@ -776,6 +781,30 @@ def test_env_failure() -> None:
     M.BROKEN.clear()
 
 
+def test_uncapped() -> None:
+    print("\n[cost gating is opt-in]")
+    from agent.orchestrator import Budget
+    from native import main as M
+
+    b = Budget(deadline_s=600, max_submissions=3, max_cost_usd=0.0)
+    b.cost_usd = 5000.0
+    check("no ceiling means money never exhausts a run", b.exhausted(), None)
+    b2 = Budget(deadline_s=600, max_submissions=3, max_cost_usd=10.0)
+    b2.cost_usd = 11.0
+    check("a ceiling that was asked for still holds",
+          b2.exhausted(), "LLM cost budget reached")
+
+    src = Path("native/main.py").read_text()
+    check("the default is uncapped",
+          '"--max-cost-usd", type=float, default=0.0' in src, True)
+    check("the evaluator is no longer budgeted outside the cap",
+          '"--evaluator-cost", type=float, default=0.0' in src, True)
+    check("  and a cap, when set, covers it too",
+          "args.max_cost_usd / (n + 1)" in src, True)
+    check("0 reaches the SDK as None, not as a zero budget",
+          "max_budget_usd=(cost_cap or None)" in src, True)
+
+
 def test_last_act() -> None:
     """Why three runs produced results and not one submission.
 
@@ -883,6 +912,7 @@ def main() -> int:
     test_supervision()
     test_kernel_route()
     test_env_failure()
+    test_uncapped()
     test_last_act()
     print("\n" + ("ALL PASS" if not FAIL else f"{len(FAIL)} FAILED: {FAIL}"))
     return 1 if FAIL else 0

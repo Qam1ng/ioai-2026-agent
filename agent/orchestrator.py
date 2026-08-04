@@ -41,7 +41,12 @@ class Budget:
 
     def exhausted(self) -> str | None:
         if self.remaining() <= 0: return "wall-clock deadline reached"
-        if self.cost_usd >= self.max_cost_usd: return "LLM cost budget reached"
+        # 0 = no ceiling. A Max subscription draws no balance, and for the
+        # competition itself the rule is that budget must not constrain the
+        # system — on the timed-deps run all three solvers stopped themselves
+        # at 33-42 minutes of a 90-minute window with the task still open.
+        if self.max_cost_usd and self.cost_usd >= self.max_cost_usd:
+            return "LLM cost budget reached"
         return None
 
     def status_line(self) -> str:

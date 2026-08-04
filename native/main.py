@@ -210,7 +210,9 @@ def opts(solver: str, ws: Path, args, budget: Budget, trace: Tracer,
         permission_mode="bypassPermissions",
         cwd=str(ws / solver),
         effort=args.effort,
-        max_budget_usd=cost_cap,
+        # None, not 0 — the SDK reads 0 as "no budget at all", which would
+        # refuse the first query rather than allow every one.
+        max_budget_usd=(cost_cap or None),
         enable_file_checkpointing=True,
         max_turns=args.max_turns,
         hooks={"PreToolUse": [HookMatcher(matcher="mcp__ioai__kaggle_submit",
@@ -378,7 +380,10 @@ async def run_solver(solver: str, ws: Path, args, budget: Budget,
                                     else BOARD_MULTI.format(n=n)),
                              budget=budget_line(budget),
                              deadline_min=args.deadline_min)
-    cap = args.max_cost_usd / n
+    # 0 = uncapped. The cap, when set, is the whole run's — the evaluator used
+    # to be budgeted separately on top, so `--max-cost-usd 80` actually spent
+    # $82.8 with three solvers at $27 each plus an evaluator at $35.
+    cap = (args.max_cost_usd / (n + 1)) if args.max_cost_usd else 0.0
     spent = 0.0
     costs: list[float] = []
     stalled = 0
@@ -412,9 +417,10 @@ async def run_solver(solver: str, ws: Path, args, budget: Budget,
                     # only grows, so the next round costs at least about what
                     # the last one did; stop while that still fits.
                     est = S.predict_next_cost(usage, costs)
-                    if (budget.remaining() <= 0
-                            or spent + est >= cap
-                            or budget.cost_usd + est >= budget.max_cost_usd):
+                    over = bool(cap) and (spent + est >= cap
+                                          or budget.cost_usd + est
+                                          >= budget.max_cost_usd)
+                    if budget.remaining() <= 0 or over:
                         trace.log("stop", solver=solver, reason="budget",
                                   round=rnd, spent=round(spent, 2),
                                   est_next=round(est, 2))
@@ -1745,7 +1751,7 @@ def write_runlog(ws: Path, args, budget: Budget, trace: Tracer) -> None:
             caveats.append("- No submission was made, so every score above is "
                            "unvalidated. Local numbers have diverged from the "
                            "leaderboard before.")
-        if budget.cost_usd >= budget.max_cost_usd * 0.95:
+        if budget.max_cost_usd and budget.cost_usd >= budget.max_cost_usd * 0.95:
             caveats.append("- The run stopped on budget, not on the clock, so it "
                            "was still improving when it ended.")
         st = json.loads((ws / "integrity.json").read_text()) if (
@@ -1971,8 +1977,16 @@ def main() -> None:
                          "the best it has even if --min-candidates is unmet; "
                          "waiting for all of them is how a stalled solver turns "
                          "into a zero")
-    ap.add_argument("--max-cost-usd", type=float, default=40.0)
-    ap.add_argument("--evaluator-cost", type=float, default=5.0)
+    ap.add_argument("--max-cost-usd", type=float, default=0.0,
+                    help="0 (the default) means no cost ceiling: a Max "
+                         "subscription draws no balance, and in the "
+                         "competition the system must not stop early on money. "
+                         "A positive value is the ceiling for the WHOLE run, "
+                         "evaluator included, split evenly.")
+    ap.add_argument("--evaluator-cost", type=float, default=0.0,
+                    help="per-query ceiling for the evaluator; 0 = none. It "
+                         "was 5.0, which is what made its cost sit outside "
+                         "--max-cost-usd rather than inside it.")
     ap.add_argument("--rounds", type=int, default=40)
     ap.add_argument("--max-turns", type=int, default=250)
     ap.add_argument("--skip-evaluator", action="store_true")

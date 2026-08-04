@@ -121,7 +121,9 @@ class Reconciler:
         return None
 
     def cost(self, spent: float, cap: float) -> Drift | None:
-        if spent > cap * 1.05:
+        # cap 0 means the run is deliberately uncapped; every dollar would
+        # otherwise read as an overrun.
+        if cap and spent > cap * 1.05:
             return Drift("cost-overrun",
                          f"${spent:.2f} spent against a ${cap:.0f} cap.")
         return None
