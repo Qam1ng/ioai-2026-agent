@@ -926,6 +926,14 @@ def test_last_act() -> None:
     # Two launchers on one workspace, twice in one day.
     import os as _os
     from native import main as _M
+    # The lock is only as good as the liveness probe under it, and that probe
+    # used to be a /proc lookup: on macOS it answered "not running" for a live
+    # pid, so the guard cleared its own lock and let a second launcher in.
+    check("the liveness probe knows its own process is alive",
+          _M.pid_alive(_os.getpid()), True)
+    check("  and that an impossible pid is not", _M.pid_alive(999999999), False)
+    check("  and refuses a nonsense pid rather than guessing",
+          _M.pid_alive(0) or _M.pid_alive(-1), False)
     _M.claim_slug(ws, "x")
     check("a run claims its workspace", (ws / "RUN.lock").exists(), True)
     try:
