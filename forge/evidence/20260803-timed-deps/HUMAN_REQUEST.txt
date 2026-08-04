@@ -1,0 +1,3 @@
+User authorized immediate participation in the currently live timed IOAI Practice Task 1 competition rather than waiting for the later practice slot.
+
+The official Starter Prompt is recorded separately in STARTER_PROMPT.txt and was read verbatim from the live Kaggle Overview page before execution.

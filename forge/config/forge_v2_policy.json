@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "name": "ioai-forge-v2",
+  "controller": "tools/forge_v2_controller.py",
+  "forced_trace_count": 3,
+  "required_trace_ids": [
+    "trace_1",
+    "trace_2",
+    "trace_3"
+  ],
+  "fidelities": [
+    {
+      "name": "smoke",
+      "maximum_runtime_seconds": 60,
+      "purpose": "contract, implementation, and gross-signal check"
+    },
+    {
+      "name": "proxy",
+      "maximum_runtime_seconds": 180,
+      "purpose": "cheap task-derived validation and failure diagnosis"
+    },
+    {
+      "name": "full",
+      "maximum_runtime_seconds": 600,
+      "purpose": "frozen evaluator and finalist evidence"
+    }
+  ],
+  "selection": {
+    "policy": "cost_aware_contextual_ucb",
+    "minimum_expected_minutes": 0.25,
+    "uncertainty_alpha": 0.35,
+    "novelty_weight": 0.15,
+    "urgency_weight": 0.1,
+    "risk_weight": 0.25,
+    "top_k_sampling": 2,
+    "force_untried_trace_round_robin": true
+  },
+  "archive": {
+    "champion_capacity": 1,
+    "challenger_capacity": 2,
+    "stepping_stone_capacity": 2,
+    "stepping_stone_ttl_rounds": 2,
+    "challenger_robust_margin": 0.03,
+    "minimum_failure_group_gain": 0.02,
+    "maximum_stepping_stone_robust_regression": 0.05
+  },
+  "shared_memory": {
+    "maximum_entries": 24,
+    "allowed_visibility": "solver_shared",
+    "forbid_audit_only_content": true,
+    "store_successes_and_failures": true
+  },
+  "hard_gates": {
+    "audit_sensitive_visible_must_be_false": true,
+    "compliance_must_pass": true,
+    "output_contract_must_pass": true,
+    "leakage_must_pass": true,
+    "duplicate_prediction_cannot_promote": true,
+    "full_fidelity_required_for_champion": true,
+    "existing_machine_gate_required_for_finalist": true,
+    "controller_may_write_experiment_ledger": false,
+    "public_leaderboard_inner_loop": false
+  }
+}

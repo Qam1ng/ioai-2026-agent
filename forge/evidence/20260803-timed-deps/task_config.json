@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "competition": "ioai-2026-ai-models-track-practice-task-1-timed-deps",
+  "metric": "0.5 * old_accuracy + 0.5 * new_accuracy",
+  "classes": 29,
+  "old_labels": {"min": 0, "max": 15},
+  "new_labels": {"min": 16, "max": 28},
+  "execution_policy": {
+    "execution_mode": "organizer_approved_timed_practice_flow_test",
+    "submission_allowed": true,
+    "clean_agent_benchmark_allowed": false,
+    "historical_task_exposure": "known",
+    "historical_test_structure_use": "prohibited",
+    "historical_predictions_use": "prohibited",
+    "organizer_override_evidence": [
+      "https://www.kaggle.com/t/4220284b45d74c78b8fd330b48e1ed5f",
+      "live Kaggle Overview showed an active timed practice window and official Starter Prompt"
+    ]
+  },
+  "resources": {
+    "training_budget_seconds": 600,
+    "accelerator": "single_kaggle_gpu",
+    "internet_enabled_in_final_kernel": false,
+    "external_data_allowed": false,
+    "external_pretrained_models_allowed": false,
+    "provided_wheel_dataset": "kamalkhan/ioai-2026-wheel-dataset",
+    "provided_checkpoint_required": true
+  },
+  "output_contract": {
+    "filename": "submission.csv",
+    "columns_in_order": ["path", "target"],
+    "path_must_exactly_match_template_in_order": true,
+    "target_dtype": "integer",
+    "target_min": 0,
+    "target_max": 28,
+    "nan_allowed": false
+  },
+  "single_forward_contract": {
+    "deterministic_waveform_views_per_sample": 1,
+    "ast_encoder_calls_per_sample": 1,
+    "module_output_shape": "[B,29]",
+    "tta_allowed": false,
+    "multiple_encoders_allowed": false,
+    "test_global_assignment_allowed": false,
+    "row_or_path_prediction_overrides_allowed": false
+  },
+  "root_branches": [
+    {"id": "baseline", "axis": "frozen encoder and frozen old classifier with freshly trained new rows"},
+    {"id": "balanced", "axis": "old-new group-balanced objective with immutable old rows"},
+    {"id": "geometry", "axis": "classifier geometry using one shared AST embedding"}
+  ]
+}

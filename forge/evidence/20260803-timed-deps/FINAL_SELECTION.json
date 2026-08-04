@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "competition": "ioai-2026-ai-models-track-practice-task-1-timed-deps",
+  "selected_node": "trace_2_geometry_group_balanced",
+  "selected_submission_ref": 55213957,
+  "kernel_slug": "yangxintong1010/ioai-timed-deps-geometry",
+  "kernel_version": 1,
+  "public_score": 0.83878,
+  "private_score": null,
+  "output_sha256": "4333c03f55b562bcc30237e0873621abf0baf74c2b2071c72d405b057f32c8e7",
+  "code_sha256": "8e4a14339423b87578ff8a39e0d7b97f4362f472e6c4ac4440a8117e0d718071",
+  "split_assignment_sha256": "e9f8b8761ef5268eb346644a1e7ea599d1f3ef8fb8d456a614c9c74cbab845d9",
+  "review_status": "pass",
+  "output_contract_status": "pass",
+  "compliance_status": "pass",
+  "selection_basis": "highest confirmed public score among three completed, contract-valid submissions",
+  "clean_agent_benchmark_claim_allowed": false,
+  "final_rank_confirmed": false
+}

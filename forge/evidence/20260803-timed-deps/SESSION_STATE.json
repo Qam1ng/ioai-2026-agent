@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "mode": "practice",
+  "preflight_status": "pass",
+  "contract_status": "active",
+  "manifest_path": "/Users/bytedance/Documents/IOAI/ioai-2026-practice/runs/20260803-2155-timed-deps-live/session_manifest.json",
+  "manifest_sha256": "148f77e69a7057afc28296a95f9bcd2115a28ab4cf675ed5d5e7db4d1519e720",
+  "start_utc": "2026-08-03T13:59:42.854978+00:00",
+  "competition_end_utc": "2026-08-03T14:29:42.854978+00:00",
+  "technical_report_deadline_utc": "2026-08-03T14:44:42.854978+00:00",
+  "competition_window_seconds": 1800,
+  "stop_new_roots_remaining_seconds": 1800,
+  "recovery_only_remaining_seconds": 600,
+  "monotonic_start_ns": 116829458,
+  "tasks": {
+    "timed_deps_task1": {
+      "competition_slug": "ioai-2026-ai-models-track-practice-task-1-timed-deps",
+      "status": "unstarted",
+      "last_known_good": null,
+      "p95_runtime_seconds": 420.0,
+      "queue_margin_seconds": 60.0,
+      "retry_reserve_seconds": 60.0,
+      "final_run_admission_cutoff_utc": "2026-08-03T14:20:42.854978+00:00"
+    }
+  },
+  "hard_wall_seconds": 1800,
+  "monotonic_deadline_ns": 1800116829458,
+  "search_policy_path": "/Users/bytedance/Documents/IOAI/ioai-agent-system/config/forge_v2_policy.json",
+  "search_policy_sha256": "3d093e66b4d927d34b9dde0cd7780bdf70827ced8181080df360971462859572"
+}
