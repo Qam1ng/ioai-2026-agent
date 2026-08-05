@@ -23,6 +23,13 @@ def _safe_base_env() -> dict[str, str]:
     }
     env = {key: value for key, value in os.environ.items() if key in allowed}
     env.update({
+        # Each lane gets a fresh HOME, and `pip install --user` follows HOME —
+        # four runs put 20GB of duplicate CUDA/PyTorch on the root filesystem
+        # and filled it, surfacing as a bare 400 on kernel push.
+        "PYTHONUSERBASE": os.environ.get(
+            "IOAI_USERBASE", "/data/qyan/ws/pyuserbase"),
+        "PIP_CACHE_DIR": os.environ.get(
+            "IOAI_PIP_CACHE", "/data/qyan/ws/pipcache"),
         "PYTHONUNBUFFERED": "1",
         "OMP_NUM_THREADS": "2",
         "MKL_NUM_THREADS": "2",
@@ -93,7 +100,16 @@ class ClaudeSubscriptionRunner(_ProcessRunner):
         home = workdir / ".agent_home"
         home.mkdir(parents=True, exist_ok=True)
         env["HOME"] = str(home)
-        env["CLAUDE_CONFIG_DIR"] = str(self.profile_dir)
+        # One auth source, never both. With ANTHROPIC_API_KEY present the lane
+        # runs on the Claude API and CLAUDE_CONFIG_DIR is deliberately unset, so
+        # there is nothing for the CLI to prefer. It also sidesteps `--bare`,
+        # which skips keychain reads: 12 of 12 rounds returned "Not logged in"
+        # while the HearSay lane, started without --bare, ran fine throughout.
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if api_key:
+            env["ANTHROPIC_API_KEY"] = api_key
+        else:
+            env["CLAUDE_CONFIG_DIR"] = str(self.profile_dir)
         env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
         env["CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION"] = "0"
         env["CLAUDE_CODE_BG_CLASSIFIER_MODEL"] = self.model

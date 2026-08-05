@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import contextlib
 import json
 import os
@@ -112,6 +113,8 @@ class FinalController:
         self._hearsay_process: asyncio.subprocess.Process | None = None
         self._selection_task: asyncio.Task | None = None
         self._stable: dict[str, tuple[str, int]] = {}
+        self._t_start: float = time.monotonic()
+        self._registered_subs: set[str] = set()
         self._candidate_errors_seen: set[str] = set()
         self._contract_pending_seen: set[str] = set()
         self._agent_sandbox: AgentSandbox | None = None
@@ -262,6 +265,15 @@ class FinalController:
         return workdir
 
     def _find_bundle(self, search_session: Path | None) -> Path | None:
+        # TEMPORARY: IOAI_REUSE_SEARCH adopts an earlier Search session instead
+        # of repeating ~25 minutes and ~$10 while the bundle is constant and
+        # only downstream plumbing changes. SHA256SUMS is still verified.
+        import os as _os
+        if search_session is None:
+            _reuse = _os.environ.get("IOAI_REUSE_SEARCH", "").strip()
+            if _reuse:
+                search_session = Path(_reuse)
+                self._event("search_reused", session=str(search_session))
         if search_session:
             status = read_json(search_session / "RUN_STATUS.json", {})
             candidate = Path(status.get("bundle_dir", "")) if status else None
@@ -318,6 +330,10 @@ class FinalController:
             "--deadline-min", str(remaining_minutes),
             "--rounds", str(h.rounds), "--max-turns", str(h.max_turns),
         ]
+        if h.solver_models:
+            command += ["--solver-models", h.solver_models]
+        if h.evaluator_model:
+            command += ["--evaluator-model", h.evaluator_model]
         if bundle:
             command.extend(["--search-bundle", str(bundle)])
         sandbox = self._sandbox_for(
@@ -347,6 +363,17 @@ class FinalController:
             self.config.claude.integrated_profile_dir
         )
         env["PYTHONUNBUFFERED"] = "1"
+        # One auth source, never both — see the note in runners.py.
+        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+        if api_key:
+            env["ANTHROPIC_API_KEY"] = api_key
+        else:
+            env["CLAUDE_CONFIG_DIR"] = str(
+                self.config.claude.integrated_profile_dir)
+        env["PYTHONUSERBASE"] = os.environ.get(
+            "IOAI_USERBASE", "/data/qyan/ws/pyuserbase")
+        env["PIP_CACHE_DIR"] = os.environ.get(
+            "IOAI_PIP_CACHE", "/data/qyan/ws/pipcache")
         log = self.control / "hearsay.stdout.log"
         err = self.control / "hearsay.stderr.log"
         with log.open("wb") as stdout, err.open("wb") as stderr:
@@ -497,6 +524,22 @@ class FinalController:
             )
         return declaration
 
+    async def _await_contract(self, *, deadline: float) -> None:
+        """Block until the shared contract exists, or give up and let lanes run.
+
+        Giving up is deliberate: if HearSay is disabled or fails the direct
+        lanes must still run — they then guess, as before, but by exception.
+        """
+        target = self.eval_root / "contract.json"
+        while time.monotonic() < deadline:
+            if target.is_file():
+                self._event("contract_ready_before_lanes",
+                            waited_s=round(time.monotonic() - self._t_start, 1))
+                return
+            await asyncio.sleep(2)
+        self._event("contract_wait_timeout",
+                    waited_s=round(time.monotonic() - self._t_start, 1))
+
     def _register_hearsay(
         self, registry: CandidateRegistry, submission_mode: str
     ) -> int:
@@ -504,9 +547,29 @@ class FinalController:
         for solver in sorted(self.hearsay_ws.glob("solver_*")):
             if not (solver / "out" / "submission.csv").is_file():
                 continue
+            # A solver writes submission.csv first and builds out/kernel/ after.
+            # Registration used to fire in that window — measured at 107s — and
+            # the candidate was eligible on the strength of its CSV alone.
+            if submission_mode == "kernel" and not (
+                solver / "out" / "kernel" / "kernel-metadata.json"
+            ).is_file():
+                continue
             try:
                 fingerprint = candidate_fingerprint(solver)
             except Exception:
+                continue
+            # Nine of solver_c's snapshots in one run were the same
+            # submission re-registered every time an unrelated file (a log, a
+            # cache, a rewritten oof) changed the directory fingerprint. The
+            # registry did mark them duplicate — after copying a full snapshot
+            # each time. Check the one hash that defines a duplicate first.
+            try:
+                sub_sha = hashlib.sha256(
+                    (solver / "out" / "submission.csv").read_bytes()
+                ).hexdigest()
+            except OSError:
+                continue
+            if sub_sha in self._registered_subs:
                 continue
             previous, stable_count = self._stable.get(str(solver), ("", 0))
             stable_count = stable_count + 1 if previous == fingerprint else 1
@@ -524,6 +587,7 @@ class FinalController:
                     "purpose": f"stable HearSay snapshot from {solver.name}",
                 }
                 before = len(registry.records())
+                self._registered_subs.add(sub_sha)
                 record = registry.register(
                     solver, source_lane="hearsay", manifest=manifest
                 )
@@ -864,6 +928,12 @@ class FinalController:
             retry_backoff_seconds=self.config.run.retry_backoff_seconds,
         )
 
+        # The shared ruler makes the three lanes comparable and is compiled a
+        # few minutes in. The direct lanes used to start against an empty
+        # SHARED_EVALUATION/, guess the unit layout, and spend a 45-minute first
+        # round on that guess: codex produced 624 rows against an expected 920,
+        # claude produced 5249. Waiting costs far less than a wrong lane-hour.
+        await self._await_contract(deadline=self._t_start + 8 * 60)
         codex_runner = self._codex_runner(
             sandbox=self._sandbox_for(
                 codex_work,

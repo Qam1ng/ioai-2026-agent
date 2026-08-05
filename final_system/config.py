@@ -73,6 +73,8 @@ class HearSayConfig:
     solvers: int
     rounds: int
     max_turns: int
+    solver_models: str = ""
+    evaluator_model: str = ""
 
 
 @dataclass(frozen=True)
@@ -213,6 +215,8 @@ class SystemConfig:
                 solvers=int(hearsay.get("solvers", 3)),
                 rounds=int(hearsay.get("rounds", 40)),
                 max_turns=int(hearsay.get("max_turns", 250)),
+                solver_models=str(hearsay.get("solver_models", "")),
+                evaluator_model=str(hearsay.get("evaluator_model", "")),
             ),
             selection=SelectionConfig(
                 enabled=bool(selection.get("enabled", True)),
