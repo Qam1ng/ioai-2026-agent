@@ -1,0 +1,67 @@
+# 保底 agent system 配置。
+#
+# 两个客户端共用一个 Azure resource 和一把 key：
+#   Codex       -> <host>/openai/v1     (Responses API, Authorization: Bearer)
+#   Claude Code -> <host>/anthropic     (Messages API,  x-api-key)
+# 两个 base_url 携带的路径长度不同，因为两个客户端各自还会往后拼：Claude Code 的
+# SDK 追加 "/v1/messages"，Codex 追加 "/responses"。写反会 404。
+#
+# API key 只放在仓库根目录的 .env（已 gitignore），不进这个文件、不进 git、
+# 不进任何 prompt 或 trace。
+#
+# 真实提交只由 CLI 的 --live 决定；配置文件永远打不开写权限。
+
+[run]
+workspace_root = "workspace/backup_system"
+api_key_env = "IOAI_LLM_API_KEY"
+
+# 两个端点都从这个 host 派生：codex -> <host>/openai/v1，claude_code -> <host>/anthropic。
+# 换 Azure resource 只改这一行。
+llm_host = "https://prosgrow-aoai-prod.services.ai.azure.com"
+
+# 每题的提交上限。--live 时会先查 Kaggle 的 remaining today，取两者较小值；
+# 查不到就直接失败，不猜一个新预算。
+max_submissions = 50
+
+# Kaggle 同一账号最多并行 2 个 kernel。三道题共用这一把信号量。
+kaggle_concurrency = 2
+
+# 开跑这么久之后如果一次都还没提交成功，watchdog 排一个"原样复制官方模板"的保底
+# 候选，先把整条提交链验证掉。
+floor_after_minutes = 8
+
+# 最后这段时间不再启动新 kernel，只等已提交的分数回来。
+submission_only_minutes_before_end = 25
+
+poll_seconds = 10
+kernel_timeout_minutes = 45
+
+# 只对瞬时失败退避重试（push 失败、产物下载失败、/kaggle/input 挂载抖动）。
+# 格式错误和 kernel 执行错误不重试。
+retry_attempts = 3
+retry_backoff_seconds = 45
+
+[codex]
+# 端点从 llm_host + runner 自动派生，不用手写。
+# 如果 codex 这条线当天出问题，只改一行 runner = "claude_code" 即可：端点自动
+# 跟着换成 anthropic 那个，model 保持 gpt-5.6-sol 不变，模型多样性不丢。
+runner = "codex"
+model = "gpt-5.6-sol"
+effort = "high"
+turn_minutes = 12
+max_rounds = 40
+
+[claude]
+runner = "claude_code"
+model = "claude-fable-5"
+effort = "high"
+turn_minutes = 12
+max_rounds = 40
+
+[manager]
+binary = "/opt/homebrew/bin/claude"
+model = "claude-fable-5"
+effort = "high"
+timeout_seconds = 180
+# 两次 manager 决策之间的最小间隔；不是每轮候选都值得叫一次模型。
+interval_seconds = 60
