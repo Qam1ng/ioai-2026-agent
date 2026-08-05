@@ -39,10 +39,29 @@ def parser() -> argparse.ArgumentParser:
         help="comma-separated three competition slugs sharing the account",
     )
     run.add_argument(
+        "--starter-prompt-file", type=Path, default=None,
+        help="file holding the organisers' exact Starter prompt; it is forwarded "
+             "to every lane verbatim and is what defines the task",
+    )
+    run.add_argument(
+        "--continuation-prompt-file", type=Path, default=None,
+        help="file holding the organisers' exact Continuation prompt, used when "
+             "a lane is restarted mid-run",
+    )
+    run.add_argument(
         "--live", action="store_true",
         help="enable real Kaggle submissions; without this flag the Broker is dry-run",
     )
     return value
+
+
+def _read_prompt(path: Path | None, label: str) -> str:
+    if path is None:
+        return ""
+    text = Path(path).expanduser().read_text(encoding="utf-8").strip()
+    if not text:
+        raise ValueError(f"{label} file is empty: {path}")
+    return text
 
 
 def doctor(config: SystemConfig, assets: Path) -> int:
@@ -102,6 +121,10 @@ def main() -> int:
         floor_group_id=args.floor_group_id,
         day_slugs=tuple(
             item.strip() for item in args.day_slugs.split(",") if item.strip()
+        ),
+        starter_prompt=_read_prompt(args.starter_prompt_file, "starter prompt"),
+        continuation_prompt_text=_read_prompt(
+            args.continuation_prompt_file, "continuation prompt"
         ),
     )
     session = asyncio.run(controller.run())

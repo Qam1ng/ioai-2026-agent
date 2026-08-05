@@ -30,6 +30,9 @@ class RunConfig:
     submission_only_minutes_before_end: float
     max_retryable_attempts: int
     retry_backoff_seconds: float
+    floor_settle_seconds: float
+    floor_settle_candidates: int
+    kernel_timeout_seconds: float
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,13 @@ class SearchConfig:
     analyst_backend: str
     research_backends: tuple[str, str, str, str]
     prompt_spec: Path
+    # Empty means "inherit the backend's own model/effort". The analyst frames
+    # the task and the researchers dig; those are different jobs and can want
+    # different models on the same backend.
+    analyst_model: str = ""
+    analyst_effort: str = ""
+    research_model: str = ""
+    research_effort: str = ""
 
 
 @dataclass(frozen=True)
@@ -74,7 +84,9 @@ class HearSayConfig:
     rounds: int
     max_turns: int
     solver_models: str = ""
+    solver_efforts: str = ""
     evaluator_model: str = ""
+    evaluator_effort: str = ""
 
 
 @dataclass(frozen=True)
@@ -178,6 +190,13 @@ class SystemConfig:
                 ),
                 max_retryable_attempts=int(run.get("max_retryable_attempts", 3)),
                 retry_backoff_seconds=float(run.get("retry_backoff_seconds", 60)),
+                floor_settle_seconds=float(run.get("floor_settle_seconds", 300)),
+                floor_settle_candidates=int(
+                    run.get("floor_settle_candidates", 3)
+                ),
+                kernel_timeout_seconds=float(
+                    run.get("kernel_timeout_seconds", 1800)
+                ),
             ),
             search=SearchConfig(
                 enabled=bool(search.get("enabled", True)),
@@ -187,6 +206,10 @@ class SystemConfig:
                     search.get("research_backends", ["claude"] * 4)
                 ),  # type: ignore[arg-type]
                 prompt_spec=prompt.resolve(),
+                analyst_model=str(search.get("analyst_model", "")),
+                analyst_effort=str(search.get("analyst_effort", "")),
+                research_model=str(search.get("research_model", "")),
+                research_effort=str(search.get("research_effort", "")),
             ),
             claude=ClaudeConfig(
                 binary=Path(claude.get("binary", "/opt/homebrew/bin/claude")),
@@ -216,7 +239,9 @@ class SystemConfig:
                 rounds=int(hearsay.get("rounds", 40)),
                 max_turns=int(hearsay.get("max_turns", 250)),
                 solver_models=str(hearsay.get("solver_models", "")),
+                solver_efforts=str(hearsay.get("solver_efforts", "")),
                 evaluator_model=str(hearsay.get("evaluator_model", "")),
+                evaluator_effort=str(hearsay.get("evaluator_effort", "")),
             ),
             selection=SelectionConfig(
                 enabled=bool(selection.get("enabled", True)),

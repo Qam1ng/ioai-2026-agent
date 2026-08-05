@@ -40,6 +40,8 @@ class SubmissionBroker:
         manager_fallback_seconds: float = 0.0,
         max_retryable_attempts: int = 3,
         retry_backoff_seconds: float = 60.0,
+        floor_settle_seconds: float = 0.0,
+        floor_settle_candidates: int = 0,
     ):
         self.root = Path(root)
         self.registry = registry
@@ -70,12 +72,14 @@ class SubmissionBroker:
         # settle so the floor is chosen from a real field, but never past a
         # fraction of the window (a short task must still floor early), and
         # never wait for candidates that will not come.
-        import os as _os
+        #
+        # Default 0: the Broker is a policy object, and a delay that only the
+        # process environment knows about is invisible to config and to every
+        # test of unrelated behaviour. The controller injects the real window
+        # from [run] like every other knob.
         self._t_start = time.monotonic()
-        self.floor_settle_seconds = float(
-            _os.environ.get("IOAI_FLOOR_SETTLE_S", "300"))
-        self.floor_settle_candidates = int(
-            _os.environ.get("IOAI_FLOOR_SETTLE_N", "3"))
+        self.floor_settle_seconds = max(0.0, float(floor_settle_seconds))
+        self.floor_settle_candidates = max(0, int(floor_settle_candidates))
         self.manager_context_state_path = (
             self.root / "selection_manager" / "context_state.json"
         )
@@ -377,7 +381,8 @@ class SubmissionBroker:
             # enough that the window fraction lands first (fraction_elapsed is
             # the run's own clock, so this scales with --duration-minutes).
             settled = (
-                len(eligible) >= self.floor_settle_candidates
+                self.floor_settle_seconds <= 0
+                or len(eligible) >= self.floor_settle_candidates
                 or (time.monotonic() - self._t_start) >= self.floor_settle_seconds
                 or fraction_elapsed >= 0.15
             )

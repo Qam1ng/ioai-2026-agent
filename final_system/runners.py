@@ -15,6 +15,20 @@ from .io import atomic_json
 from .security import AgentSandbox
 
 
+def _prepend_tool_bin(env: dict[str, str], tool_bin_dir: Path | None) -> None:
+    """Put the read-only Kaggle shim ahead of the real CLI on the agent's PATH.
+
+    IOAI requires the system to download its own data, so agents need a working
+    `kaggle` command — but not one that can spend the submission budget. The
+    shim forwards a whitelist of read-only calls to the controller-side
+    gateway; the sandbox denies the real binary and the credential file, so
+    this is the only Kaggle the agent can reach.
+    """
+    if tool_bin_dir is None:
+        return
+    env["PATH"] = f"{tool_bin_dir}:{env.get('PATH', '')}".rstrip(":")
+
+
 def _safe_base_env() -> dict[str, str]:
     allowed = {
         "PATH", "USER", "LOGNAME", "SHELL", "LANG", "LC_ALL", "TERM",
@@ -71,6 +85,7 @@ class ClaudeSubscriptionRunner(_ProcessRunner):
         self, *, binary: Path, model: str, effort: str, profile_dir: Path,
         allowed_tools: str = "Bash,Read,Edit,Write,Glob,Grep,WebSearch,WebFetch",
         sandbox: AgentSandbox | None = None,
+        tool_bin_dir: Path | None = None,
     ):
         super().__init__()
         self.binary = Path(binary)
@@ -79,6 +94,7 @@ class ClaudeSubscriptionRunner(_ProcessRunner):
         self.profile_dir = Path(profile_dir)
         self.allowed_tools = allowed_tools
         self.sandbox = sandbox
+        self.tool_bin_dir = Path(tool_bin_dir) if tool_bin_dir else None
 
     def argv(self, *, resume_session_id: str | None, persist_session: bool) -> list[str]:
         command = [
@@ -114,6 +130,7 @@ class ClaudeSubscriptionRunner(_ProcessRunner):
         env["CLAUDE_CODE_ENABLE_PROMPT_SUGGESTION"] = "0"
         env["CLAUDE_CODE_BG_CLASSIFIER_MODEL"] = self.model
         env["CLAUDE_CODE_SUBAGENT_MODEL"] = self.model
+        _prepend_tool_bin(env, self.tool_bin_dir)
         return env
 
     async def run(
@@ -206,6 +223,7 @@ class OpenRouterCodexRunner(_ProcessRunner):
     def __init__(
         self, *, binary: Path, model: str, effort: str, provider_id: str,
         base_url: str, api_key_env: str, supports_web_search: bool,
+        tool_bin_dir: Path | None = None,
         sandbox: AgentSandbox | None = None,
     ):
         super().__init__()
@@ -217,6 +235,7 @@ class OpenRouterCodexRunner(_ProcessRunner):
         self.api_key_env = api_key_env
         self.supports_web_search = supports_web_search
         self.sandbox = sandbox
+        self.tool_bin_dir = Path(tool_bin_dir) if tool_bin_dir else None
 
     def argv(
         self, *, workdir: Path, last_message: Path,
@@ -268,6 +287,7 @@ class OpenRouterCodexRunner(_ProcessRunner):
         home.mkdir(parents=True, exist_ok=True); codex_home.mkdir(parents=True, exist_ok=True)
         env["HOME"] = str(home)
         env["CODEX_HOME"] = str(codex_home)
+        _prepend_tool_bin(env, self.tool_bin_dir)
         return env
 
     async def run(

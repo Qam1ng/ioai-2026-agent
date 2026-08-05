@@ -99,6 +99,23 @@ CONTRACT = """
   在 `candidate.json` 里如实声明 `estimated_kernel_minutes`(≤25)。给脚本设置
   独立的墙钟预算:开头读环境变量 `IOAI_BUDGET_S`,超时就写出当时最好的 submission ——
   Kaggle 无法取消正在运行的 kernel，它烧掉的配额属于当天的下一道题。
+- 30 分钟是端到端的：装依赖 + 读数据 + 训练 + 推理 + 写 submission 全在里面，超时
+  被硬杀不是低分而是零。方法选择要倒过来做：先问「这个方案能不能在单卡 25 分钟内
+  训完并推理完」，不能就换更小的骨干、更少的 epoch、更强的特征，而不是写完才发现
+  跑不动。
+- 硬件只有三挡：`cpu` / `p100`（Tesla P100 16GB）/ `t4`（Tesla T4 16GB）。都是上
+  一代卡，**论文里"单卡几小时"的配置在这里跑不完**。
+- **GPU 位比提交额度稀缺得多**：整个 Kaggle 账号同时只有 2 个 GPU 会话，当天三道
+  题共用这一个账号；CPU 位有 5 个，几乎不排队。凡是 CPU 25 分钟内能跑完的方案，
+  `candidate.json` 里一律写 `"accelerator": "cpu"` —— 错误占用 GPU 会直接堵住另外
+  两道题。候选被回报为 `resource_deferred` 是正常排队，不是候选有问题，不要因此
+  改方案。
+- **kernel 脚本开头必须写一段 Report**：方法、验证方式、预计运行时间、依赖。比赛
+  按它评审提交的代码；缺失会在推送前被拒（不消耗额度，但要重发一版）。写成文件
+  最顶端的 docstring 或注释块，`evidence/NOTES.md` 不算——那个不会被上传。
+- 需要补数据时 PATH 上的 `kaggle` 是**只读网关**：`competitions download` /
+  `files` / `list` / `leaderboard` 可用，`submit` 和 `kernels push` 会被拒绝。
+  提交由外部 Broker 统一执行，它持有全题唯一的 50 次额度。
 
 # 硬规则（违反即失格，不只是低分）
 

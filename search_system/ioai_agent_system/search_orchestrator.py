@@ -76,6 +76,21 @@ class SearchRunConfig:
     def backend_for_research(self, research_id: str) -> str:
         return self.research_backends[int(research_id[1]) - 1]
 
+    def runner_key_for(self, role: str) -> tuple[str, str]:
+        """(role_key, backend_key) — the caller prefers the role-specific runner.
+
+        Analyst and research can want different models on the same backend (a
+        cheap analyst, a strong researcher), and a runner instance carries its
+        own model. So the controller may pass runners keyed by role
+        ("analyst", "R1"..."R4") as well as by backend; backend keys remain the
+        fallback so a single-runner caller still works.
+        """
+        backend = (
+            self.analyst_backend if role == "analyst"
+            else self.backend_for_research(role)
+        )
+        return role, backend
+
 
 class ControllerAuditLog:
     """Small append-only, hash-chained controller trajectory."""
@@ -202,10 +217,16 @@ class SearchOrchestrator:
         require_disjoint_paths(config.assets_dir, config.output_root)
         if config.prior_lessons_dir is not None:
             require_disjoint_paths(config.prior_lessons_dir, config.output_root)
-        required_backends = {config.analyst_backend, *config.research_backends}
-        missing = required_backends - set(runners)
+        missing = [
+            role for role in ("analyst", "R1", "R2", "R3", "R4")
+            if not set(config.runner_key_for(role)) & set(runners)
+        ]
         if missing:
-            raise ValueError(f"missing agent runners: {sorted(missing)}")
+            raise ValueError(f"missing agent runners for roles: {missing}")
+
+    def _runner(self, role: str) -> SearchAgentRunner:
+        role_key, backend_key = self.config.runner_key_for(role)
+        return self.runners.get(role_key) or self.runners[backend_key]
 
     def _make_paths(self) -> SearchRunPaths:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -321,7 +342,7 @@ class SearchOrchestrator:
                     ),
                 )
                 self._save_prompt(paths, "analyst_stage_a", stage_a_prompt)
-                stage_a_result = await self.runners[self.config.analyst_backend].run(
+                stage_a_result = await self._runner("analyst").run(
                     agent_id="analyst_stage_a",
                     role="task_analyst_stage_a",
                     prompt=stage_a_prompt,
@@ -432,7 +453,7 @@ class SearchOrchestrator:
                     stage_b_timeout_s=stage_b_timeout,
                 )
                 self._save_prompt(paths, "analyst_stage_b", stage_b_prompt)
-                stage_b_result = await self.runners[self.config.analyst_backend].run(
+                stage_b_result = await self._runner("analyst").run(
                     agent_id="analyst_stage_b",
                     role="task_analyst_stage_b",
                     prompt=stage_b_prompt,
@@ -664,7 +685,7 @@ class SearchOrchestrator:
                     "timeout_s": timeout_s,
                 },
             )
-            result = await self.runners[backend].run(
+            result = await self._runner(research_id).run(
                 agent_id=f"research_{research_id}",
                 role="research_agent",
                 prompt=prompt,

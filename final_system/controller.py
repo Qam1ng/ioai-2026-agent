@@ -23,6 +23,8 @@ from search_system.ioai_agent_system.search_orchestrator import (
     SearchRunConfig,
 )
 
+from agent.tools.registry import _kaggle_bin
+
 from .broker import SubmissionBroker
 from .calibration import FeedbackCalibrator
 from .config import SystemConfig
@@ -30,6 +32,8 @@ from .day_gate import DayResourceGate
 from .evaluation import freeze_contract
 from .io import append_jsonl, atomic_json, read_json, sha256_file, tree_hash
 from .kaggle import DryRunAdapter, KaggleAdapter
+from .kaggle_gateway import ALLOWED as GATEWAY_ALLOWED
+from .kaggle_gateway import KaggleReadOnlyGateway
 from .prompts import continuation_prompt, direct_prompt
 from .registry import CandidateRegistry, candidate_fingerprint
 from .runners import (
@@ -72,6 +76,7 @@ class FinalController:
         duration_minutes: float, competition_mode: str, kaggle_user: str,
         live: bool, run_id: str = "", resource_pool_id: str = "",
         floor_group_id: str = "", day_slugs: tuple[str, ...] = (),
+        starter_prompt: str = "", continuation_prompt_text: str = "",
     ):
         if duration_minutes <= 0:
             raise ValueError("duration_minutes must be positive")
@@ -119,6 +124,16 @@ class FinalController:
         self._contract_pending_seen: set[str] = set()
         self._agent_sandbox: AgentSandbox | None = None
         self._fallback_evaluator_task: asyncio.Task | None = None
+        # The organisers' text, passed through verbatim. It is the task as the
+        # competition states it; our own prompt is the system layer around it,
+        # which the rules allow ("provide a system prompt on how the agent
+        # should submit via Kaggle CLI"). Substituting our paraphrase for the
+        # official wording would also drop the Report instruction it carries.
+        self.starter_prompt = starter_prompt.strip()
+        self.continuation_prompt_text = continuation_prompt_text.strip()
+        self.gateway_root = self.session / "kaggle_gateway"
+        self._gateway: KaggleReadOnlyGateway | None = None
+        self._tool_bin_dir: Path | None = None
 
     def _event(self, event: str, **payload: Any) -> None:
         append_jsonl(self.events, {"timestamp": time.time(), "event": event, **payload})
@@ -133,6 +148,7 @@ class FinalController:
             binary=c.binary, model=model or c.model, effort=effort or c.effort,
             profile_dir=profile_dir,
             sandbox=sandbox or self._agent_sandbox,
+            tool_bin_dir=self._tool_bin_dir,
             **({"allowed_tools": allowed_tools} if allowed_tools is not None else {}),
         )
 
@@ -146,6 +162,7 @@ class FinalController:
             api_key_env=c.api_key_env,
             supports_web_search=c.supports_web_search,
             sandbox=sandbox or self._agent_sandbox,
+            tool_bin_dir=self._tool_bin_dir,
         )
 
     def _sandbox_for(
@@ -158,11 +175,42 @@ class FinalController:
             protected_write_roots=(
                 ROOT, self.session, self.config.resources.root, self.assets_dir,
             ),
-            writable_roots=(writable_root,),
+            # The gateway dir holds the read-only Kaggle shim and its socket;
+            # connecting to a unix socket needs write access to the node.
+            writable_roots=(writable_root, self.gateway_root),
             read_only_roots=read_only_roots,
             protected_read_roots=(self.config.run.workspace_root,),
-            readable_roots=(writable_root, *read_only_roots),
+            readable_roots=(writable_root, self.gateway_root, *read_only_roots),
         )
+
+    def _lane_prompt(
+        self, *, lane: str, workdir: Path, deadline_minutes: float,
+        submission_mode: str,
+    ) -> str:
+        """Our operating contract, then the organisers' task text verbatim.
+
+        The rules let us supply a system prompt covering how the agent submits;
+        they do not let us restate the problem. So ours goes first and is
+        clearly framed as the harness, and the official Starter prompt follows
+        unmodified — it is what actually defines the task, and it carries the
+        Report instruction that submissions are graded on.
+        """
+        harness = direct_prompt(
+            lane=lane, slug=self.slug, workdir=workdir,
+            deadline_minutes=deadline_minutes, submission_mode=submission_mode,
+        )
+        if not self.starter_prompt:
+            return harness
+        return (
+            f"{harness}\n\n---\n\n"
+            "# 官方题面（主办方原文，逐字转发，未做任何改写）\n\n"
+            "以下是本题的权威描述。它与上面的系统约定冲突时，**题目要求以下面为准**，\n"
+            "只有候选交付协议和提交额度纪律仍由上面的系统层规定。\n\n"
+            f"{self.starter_prompt}\n"
+        )
+
+    def _lane_continuation(self, lane: str) -> str:
+        return self.continuation_prompt_text or continuation_prompt(lane)
 
     def _prepare(self) -> None:
         if self.session.exists():
@@ -185,12 +233,28 @@ class FinalController:
         sandbox = self._sandbox_for(
             self.search_root, read_only_roots=(self.assets_dir,)
         )
+        # Keyed by role, not only by backend: the analyst frames the task and
+        # the researchers dig, and a runner instance carries one model, so the
+        # two jobs would otherwise be forced onto the same one. Backend keys
+        # stay as the fallback for roles with no per-role override.
+        def claude_for(model: str, effort: str) -> Any:
+            return self._claude_runner(
+                self.config.claude.integrated_profile_dir,
+                model=model or None, effort=effort or None, sandbox=sandbox,
+            )
+
         runners: dict[str, Any] = {
-            "claude": self._claude_runner(
-                self.config.claude.integrated_profile_dir, sandbox=sandbox
-            ),
+            "claude": claude_for("", ""),
             "codex": self._codex_runner(sandbox=sandbox),
         }
+        if c.analyst_backend == "claude" and (c.analyst_model or c.analyst_effort):
+            runners["analyst"] = claude_for(c.analyst_model, c.analyst_effort)
+        if c.research_model or c.research_effort:
+            for index, backend in enumerate(c.research_backends, start=1):
+                if backend == "claude":
+                    runners[f"R{index}"] = claude_for(
+                        c.research_model, c.research_effort
+                    )
         # 短排练不能让 Search 吃完整个窗口；正式 6h 仍使用配置的 60min。
         duration = max(
             1,
@@ -332,8 +396,12 @@ class FinalController:
         ]
         if h.solver_models:
             command += ["--solver-models", h.solver_models]
+        if h.solver_efforts:
+            command += ["--solver-efforts", h.solver_efforts]
         if h.evaluator_model:
             command += ["--evaluator-model", h.evaluator_model]
+        if h.evaluator_effort:
+            command += ["--evaluator-effort", h.evaluator_effort]
         if bundle:
             command.extend(["--search-bundle", str(bundle)])
         sandbox = self._sandbox_for(
@@ -794,6 +862,19 @@ class FinalController:
 
     async def run(self) -> Path:
         self._prepare()
+        # IOAI requires the system to fetch its own data. The credential stays
+        # outside the sandbox; agents get a shim that can only read.
+        self._gateway = KaggleReadOnlyGateway(
+            self.gateway_root, kaggle_bin=_kaggle_bin(), python=sys.executable,
+            events_path=self.control / "kaggle_gateway_events.jsonl",
+        )
+        await self._gateway.start()
+        self._tool_bin_dir = self._gateway.bin_dir
+        self._event(
+            "kaggle_gateway_started",
+            socket=str(self._gateway.socket_path),
+            allowed=sorted(f"{a} {b}" for a, b in GATEWAY_ALLOWED),
+        )
         try:
             probe_secret = self.control / "security" / "sandbox_probe_secret"
             self._agent_sandbox = build_agent_sandbox(
@@ -860,6 +941,7 @@ class FinalController:
                 default_gpu_kernel_minutes=resources.default_gpu_kernel_minutes,
                 default_cpu_kernel_minutes=resources.default_cpu_kernel_minutes,
                 kernel_start_margin_minutes=resources.kernel_start_margin_minutes,
+                kernel_timeout_s=self.config.run.kernel_timeout_seconds,
             )
             remaining = await asyncio.to_thread(adapter.remaining_today)
             if remaining is None:
@@ -926,6 +1008,8 @@ class FinalController:
             manager_fallback_seconds=selection.fallback_seconds,
             max_retryable_attempts=self.config.run.max_retryable_attempts,
             retry_backoff_seconds=self.config.run.retry_backoff_seconds,
+            floor_settle_seconds=self.config.run.floor_settle_seconds,
+            floor_settle_candidates=self.config.run.floor_settle_candidates,
         )
 
         # The shared ruler makes the three lanes comparable and is compiled a
@@ -956,12 +1040,12 @@ class FinalController:
         direct_tasks = [
             asyncio.create_task(run_lane_loop(
                 lane="codex", runner=codex_runner,
-                prompt=direct_prompt(
-                    lane="codex", slug=self.slug, workdir=codex_work,
+                prompt=self._lane_prompt(
+                    lane="codex", workdir=codex_work,
                     deadline_minutes=max(1, (exploration_deadline-started)/60),
                     submission_mode=submission_mode,
                 ),
-                continuation=continuation_prompt("codex"), workdir=codex_work,
+                continuation=self._lane_continuation("codex"), workdir=codex_work,
                 trace_dir=self.control / "trajectories" / "codex",
                 deadline_monotonic=exploration_deadline,
                 turn_seconds=self.config.codex.turn_minutes * 60,
@@ -969,12 +1053,12 @@ class FinalController:
             )),
             asyncio.create_task(run_lane_loop(
                 lane="claude", runner=claude_runner,
-                prompt=direct_prompt(
-                    lane="claude", slug=self.slug, workdir=claude_work,
+                prompt=self._lane_prompt(
+                    lane="claude", workdir=claude_work,
                     deadline_minutes=max(1, (exploration_deadline-started)/60),
                     submission_mode=submission_mode,
                 ),
-                continuation=continuation_prompt("claude"), workdir=claude_work,
+                continuation=self._lane_continuation("claude"), workdir=claude_work,
                 trace_dir=self.control / "trajectories" / "claude",
                 deadline_monotonic=exploration_deadline,
                 turn_seconds=self.config.claude.turn_minutes * 60,
@@ -1053,6 +1137,9 @@ class FinalController:
                 await asyncio.gather(
                     self._fallback_evaluator_task, return_exceptions=True
                 )
+            if self._gateway is not None:
+                await self._gateway.stop()
+                self._gateway = None
             await asyncio.gather(
                 codex_runner.terminate_all(), claude_runner.terminate_all(),
                 *(

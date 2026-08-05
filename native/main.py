@@ -251,14 +251,37 @@ def _model_for(role: str, args) -> str:
         return args.evaluator_model
     mapping = getattr(args, "_solver_model_map", None)
     if mapping is None:
-        mapping = {}
-        for pair in (getattr(args, "solver_models", "") or "").split(","):
-            pair = pair.strip()
-            if "=" in pair:
-                k, v = pair.split("=", 1)
-                mapping[f"solver_{k.strip().lower()}"] = v.strip()
+        mapping = _parse_role_map(getattr(args, "solver_models", ""))
         args._solver_model_map = mapping
     return mapping.get(role, args.model)
+
+
+def _parse_role_map(spec: str) -> dict[str, str]:
+    """Parse "a=claude-fable-5,c=claude-opus-5" into solver-role keys."""
+    mapping: dict[str, str] = {}
+    for pair in (spec or "").split(","):
+        pair = pair.strip()
+        if "=" in pair:
+            k, v = pair.split("=", 1)
+            mapping[f"solver_{k.strip().lower()}"] = v.strip()
+    return mapping
+
+
+def _effort_for(role: str, args) -> str:
+    """Which reasoning effort this role runs at.
+
+    The evaluator compiles the shared ruler once and then stops, so it does not
+    need the same budget as a solver that iterates for hours — and a cheaper
+    model there frees headroom without touching the solvers. Anything unmapped
+    falls back to --effort.
+    """
+    if role == "evaluator" and getattr(args, "evaluator_effort", ""):
+        return args.evaluator_effort
+    mapping = getattr(args, "_solver_effort_map", None)
+    if mapping is None:
+        mapping = _parse_role_map(getattr(args, "solver_efforts", ""))
+        args._solver_effort_map = mapping
+    return mapping.get(role, args.effort)
 
 
 def opts(solver: str, ws: Path, args, budget: Budget, trace: Tracer,
@@ -382,7 +405,7 @@ def opts(solver: str, ws: Path, args, budget: Budget, trace: Tracer,
         mcp_servers={"ioai": server},
         permission_mode="bypassPermissions",
         cwd=str(ws / solver),
-        effort=args.effort,
+        effort=_effort_for(solver, args),
         # None, not 0 — the SDK reads 0 as "no budget at all", which would
         # refuse the first query rather than allow every one.
         max_budget_usd=(cost_cap or None),
@@ -2366,8 +2389,10 @@ async def run(args) -> None:
            "kaggle says" if left is not None else
            "no quota reading — guessing")
     print(f"[boot] {whoami()}", flush=True)
-    roles = {n: _model_for(n, args) for n in names}
-    roles["evaluator"] = _model_for("evaluator", args)
+    roles = {
+        n: f"{_model_for(n, args)}/{_effort_for(n, args)}"
+        for n in [*names, "evaluator"]
+    }
     print(f"[boot] models: {roles}", flush=True)
     print(f"[boot] submissions: {src} "
           + ("(HearSay may send 0 directly)" if args.external_broker_dir else
@@ -2514,6 +2539,11 @@ def main() -> None:
                     help="Claude model for the evaluator; empty uses --model")
     ap.add_argument("--effort", default="high",
                     choices=["low", "medium", "high", "xhigh", "max"])
+    ap.add_argument("--solver-efforts", default="",
+                    help="per-solver effort e.g. a=max,c=high; empty uses --effort")
+    ap.add_argument("--evaluator-effort", default="",
+                    choices=["", "low", "medium", "high", "xhigh", "max"],
+                    help="effort for the evaluator; empty uses --effort")
     ap.add_argument("--solvers", type=int, default=3,
                     help="1 = the control (kernel ceiling, no board)")
     ap.add_argument("--deadline-min", type=float, default=120)

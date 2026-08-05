@@ -58,8 +58,8 @@ READY
   "candidate_id": "short-safe-id",
   "source_lane": "{lane}",
   "submission_mode": "{submission_mode}",
-  "accelerator": "p100",
-  "estimated_kernel_minutes": 22,
+  "accelerator": "cpu",
+  "estimated_kernel_minutes": 8,
   "purpose": "本候选相对上一个版本唯一改变了什么",
   "parent_id": "",
   "claimed_local_score": null
@@ -69,12 +69,46 @@ READY
 claimed score 只作笔记，Broker 永远从原始 OOF 重算。候选中不要放数据副本、模型
 checkpoint、凭证或软链接；若为 kernel 模式，必须在 Kaggle 上从官方挂载资产重新训练/推理。
 Kaggle CLI 实际只上传 metadata 指定的一个 `code_file`，因此它必须是完全独立的
-单文件脚本；不要让它 import 同目录的 helper。`estimated_kernel_minutes` 填保守的
-端到端运行时间，Broker 会据此阻止来不及在截止前完成的 Kernel。**本题计分 kernel
-的平台时限是 30 分钟(含 wheel 依赖安装),声明值必须留出余量(建议 ≤ 25);超过
-平台时限的 kernel 会被 Kaggle 硬杀,什么都留不下。** 脚本开头读取环境变量
-`IOAI_BUDGET_S`(Broker 注入的实际墙钟预算),先写出保底 submission 再迭代,预算
-耗尽立即写出当前最好结果。
+单文件脚本；不要让它 import 同目录的 helper。
+
+# 计分 kernel 的硬约束——先按这些约束选方法，再写代码
+
+**时间：本题计分 kernel 的平台时限是 30 分钟，含 wheel 依赖安装。** 这是端到端
+的：安装依赖 + 读数据 + 训练 + 推理 + 写 submission 全在里面。超时会被 Kaggle 硬
+杀，什么都留不下——不是低分，是零。所以方法选择要倒过来做：先问「这个方案能不能
+在单卡 25 分钟内训完并推理完」，不能就换更小的骨干、更少的 epoch、更强的特征，
+而不是先写完再发现跑不动。脚本开头读取环境变量 `IOAI_BUDGET_S`（Broker 注入的实
+际墙钟预算），**先写出一个保底 submission 再开始迭代**，预算耗尽立即写出当前最好
+结果。
+
+**硬件：`accelerator` 只能是 `cpu` / `p100` / `t4`**，分别对应 Kaggle 的无加速器、
+Nvidia Tesla P100（16GB）、Nvidia Tesla T4（16GB）。两者都是上一代卡，显存 16GB，
+半精度吞吐远低于 A100/H100——**论文里"单卡几小时"的配置在这里跑不完**。
+
+**GPU 位是全系统最稀缺的资源，比提交额度稀缺得多。** 整个 Kaggle 账号同时只有
+**2 个 GPU 会话**，而当天三道题共用这一个账号；CPU 位有 5 个，几乎不排队。所以：
+
+- 凡是 CPU 在 25 分钟内能跑完的方案，`accelerator` 一律写 `cpu`。错误占用 GPU 会
+  直接堵住另外两道题。
+- 只有确实需要 GPU 才写 `p100`/`t4`，并且要让它值得——一个占满 GPU 位却只提升
+  0.001 的候选，代价是另一道题少交一次。
+- 候选被回报为 `resource_deferred` 是**正常排队**，不是你的候选有问题，不要因此
+  改方案或重写；等下一轮即可。
+
+`estimated_kernel_minutes` 填保守的端到端运行时间（≤25），Broker 据此排队并阻止
+来不及在截止前完成的 Kernel；**低报不会让你插队，只会让 kernel 被中途杀掉**。
+
+**kernel 脚本开头必须写一段 Report**，简述这份提交做了什么：方法、验证方式、预计
+运行时间、依赖。比赛按这段 Report 评审提交的代码，缺失会被 Broker 在推送前直接
+拒绝（不消耗额度，但你要重新发一版）。写成文件最顶端的 docstring 或注释块即可，
+`evidence/NOTES.md` 不算——那个文件不会被上传。
+
+# 数据获取
+
+`OFFICIAL_ASSETS/` 里已有一份只读快照。你也可以自己用 `kaggle` 命令补取，PATH 上
+的是一个**只读网关**：`competitions download` / `files` / `list` / `leaderboard`
+可用，`submit`、`kernels push` 一律拒绝并返回明确原因——提交由 Broker 统一执行，
+它持有全题唯一的 50 次额度。凭证不在你的环境里，也不需要在。
 
 只读取 `FEEDBACK.jsonl` 中属于本路线的榜单反馈。持续做“假设→最低成本实验→公共
 标尺验证→保留/回退”的循环；不要在第一个可用解出现后结束。当前工作目录是

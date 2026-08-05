@@ -321,6 +321,54 @@ def validate_submission_csv(assets: Path, candidate_csv: Path) -> dict:
     }
 
 
+#: IOAI grades the submitted code with a short Report at the top of it. The
+#: instruction reaches the agents through the Starter prompt, but a missing
+#: Report is only discoverable after the competition (the recovery is a Report
+#: Generation prompt plus a Late Submission inside 30 minutes), so it is worth
+#: refusing to spend a submission on a kernel that has none.
+_REPORT_MARKERS = ("report", "报告")
+_REPORT_MIN_CHARS = 120
+
+
+def _report_header_problem(code_path: Path) -> str:
+    """Empty string when the script opens with a Report block."""
+    try:
+        text = code_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return f"kernel code_file is unreadable: {exc}"
+    header: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#!") or stripped.startswith("# -*-"):
+            continue
+        if stripped.startswith("#") or stripped.startswith(('"""', "'''")):
+            header.append(line)
+            continue
+        if not stripped and header:
+            header.append(line)
+            continue
+        if not stripped:
+            continue
+        break
+    # A docstring opener means the whole leading string literal is the header.
+    if text.lstrip().startswith(('"""', "'''")):
+        quote = text.lstrip()[:3]
+        rest = text.lstrip()[3:]
+        end = rest.find(quote)
+        header = [rest[: end if end >= 0 else len(rest)]]
+    block = "\n".join(header).strip()
+    if len(block) < _REPORT_MIN_CHARS or not any(
+        marker in block.lower() for marker in _REPORT_MARKERS
+    ):
+        return (
+            "kernel code_file must open with a short Report describing the "
+            "submitted code (a leading docstring or comment block naming it "
+            "'Report', at least "
+            f"{_REPORT_MIN_CHARS} characters); IOAI grades submissions on it"
+        )
+    return ""
+
+
 def validate_kernel_package(candidate_root: Path) -> dict:
     """Require the standalone script package that Kaggle actually uploads."""
     candidate_root = Path(candidate_root)
@@ -348,6 +396,10 @@ def validate_kernel_package(candidate_root: Path) -> dict:
         errors.append(f"kernel code_file is missing: {code_name}")
     elif code_path.suffix.lower() != ".py":
         errors.append("formal IOAI kernel code_file must be a plain .py script")
+    else:
+        problem = _report_header_problem(code_path)
+        if problem:
+            errors.append(problem)
     if metadata and metadata.get("kernel_type", "script") != "script":
         errors.append("kernel_type must be script")
     if metadata and metadata.get("language", "python") != "python":
