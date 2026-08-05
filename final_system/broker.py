@@ -63,6 +63,19 @@ class SubmissionBroker:
         self.manager_fallback_seconds = manager_fallback_seconds
         self.max_retryable_attempts = max(1, int(max_retryable_attempts))
         self.retry_backoff_seconds = max(0.0, float(retry_backoff_seconds))
+        # Floor is the first submission and does not compare scores — it just
+        # gets *something* legal onto the board. On the live run it fired at
+        # minute 11 on the best-so-far 0.906 and occupied a GPU slot; the 0.934
+        # arrived at minute 15 and had to wait. Give the ruler a moment to
+        # settle so the floor is chosen from a real field, but never past a
+        # fraction of the window (a short task must still floor early), and
+        # never wait for candidates that will not come.
+        import os as _os
+        self._t_start = time.monotonic()
+        self.floor_settle_seconds = float(
+            _os.environ.get("IOAI_FLOOR_SETTLE_S", "300"))
+        self.floor_settle_candidates = int(
+            _os.environ.get("IOAI_FLOOR_SETTLE_N", "3"))
         self.manager_context_state_path = (
             self.root / "selection_manager" / "context_state.json"
         )
@@ -358,6 +371,18 @@ class SubmissionBroker:
             return [], ""
         allocated = self.committed()
         if not allocated:
+            # Hold the floor briefly so it is chosen from a settled field rather
+            # than from whatever finished first — unless the field is already
+            # deep enough, or the settle window has passed, or the run is short
+            # enough that the window fraction lands first (fraction_elapsed is
+            # the run's own clock, so this scales with --duration-minutes).
+            settled = (
+                len(eligible) >= self.floor_settle_candidates
+                or (time.monotonic() - self._t_start) >= self.floor_settle_seconds
+                or fraction_elapsed >= 0.15
+            )
+            if not settled:
+                return [], ""
             return eligible, "floor"
 
         final_phase = force_final or fraction_elapsed >= self.final_start_fraction

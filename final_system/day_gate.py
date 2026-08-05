@@ -187,6 +187,7 @@ class DayResourceGate:
         accelerator: str,
         estimated_seconds: float,
         deadline_epoch: float,
+        local_score: float | None = None,
     ) -> tuple[dict[str, Any] | None, str, str]:
         if slug not in self.expected_slugs:
             return (
@@ -207,6 +208,9 @@ class DayResourceGate:
             "accelerator": accelerator.lower(),
             "kind": self._kind(accelerator),
             "estimated_seconds": max(0.0, float(estimated_seconds)),
+            # For queue ordering only: higher is better, missing sorts last.
+            "local_score": (float(local_score)
+                            if local_score is not None else None),
             "created_at": time.time(),
             "deadline_epoch": wait_deadline,
             "latest_start_epoch": float(deadline_epoch),
@@ -230,6 +234,12 @@ class DayResourceGate:
                     ),
                     key=lambda item: (
                         0 if item.get("submission_class") == "floor" else 1,
+                        # The best candidate takes the next slot, not whoever
+                        # queued first. On the live run the top OOF (0.934) sat
+                        # behind a 0.906 for the whole window because arrival
+                        # order was the only tie-break. None sorts last.
+                        -(item.get("local_score")
+                          if item.get("local_score") is not None else -1e9),
                         float(item.get("created_at", 0)),
                         str(item.get("lease_id", "")),
                     ),
