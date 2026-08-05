@@ -57,7 +57,8 @@ def doctor(config: SystemConfig, assets: Path) -> int:
         "codex_binary": config.codex.binary.is_file(),
         "search_prompt": config.search.prompt_spec.is_file(),
         "openrouter_key_env": bool(os.environ.get(config.codex.api_key_env)),
-        "agent_os_sandbox": Path("/usr/bin/sandbox-exec").is_file(),
+        "agent_os_sandbox": Path("/usr/bin/sandbox-exec").is_file()
+        or Path("/usr/bin/bwrap").is_file(),
     }
     if checks["claude_binary"]:
         for label, profile in (
