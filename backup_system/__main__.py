@@ -162,9 +162,12 @@ def main() -> int:
         parser.error("run requires --starter-prompt PATH (or --task for a rehearsal)")
     if len(args.starter_prompt) + len(args.task) > 3:
         parser.error("a competition day has three problems; more than three given")
-    if args.live and not os.environ.get(config.run.api_key_env):
+    # Rule violations are reported before anything about local setup: a run that
+    # is not allowed to happen should say so whether or not a key is present.
+    if args.task and args.live:
         parser.error(
-            f"{config.run.api_key_env} is empty; set it in .env before --live"
+            "--task is a rehearsal path: it takes data a human prepared, which "
+            "the rules assign to the agent. Use --starter-prompt for a scored run."
         )
     if args.task and not args.kernel_timeout_seconds:
         parser.error(
@@ -172,10 +175,9 @@ def main() -> int:
             "--kernel-timeout-seconds is required with it. Kaggle pushes without "
             "a --timeout produce invalid IOAI solutions."
         )
-    if args.task and args.live:
+    if args.live and not os.environ.get(config.run.api_key_env):
         parser.error(
-            "--task is a rehearsal path: it takes data a human prepared, which "
-            "the rules assign to the agent. Use --starter-prompt for a scored run."
+            f"{config.run.api_key_env} is empty; set it in .env before --live"
         )
 
     run = BackupRun(
