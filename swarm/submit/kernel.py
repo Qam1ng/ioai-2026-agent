@@ -242,7 +242,8 @@ def lookup_current_version(kernel_ref: str) -> int | None:
     return None
 
 
-def push_kernel(dir: Path, timeout_s: float = 900.0) -> tuple[bool, int | None, str]:
+def push_kernel(dir: Path, timeout_s: float = 900.0,
+                kernel_timeout_s: int | None = None) -> tuple[bool, int | None, str]:
     """Push a kernel directory. Returns ``(ok, version, raw_output)``.
 
     ``version`` is what ``competition_submit_code`` needs; submitting without
@@ -254,7 +255,15 @@ def push_kernel(dir: Path, timeout_s: float = 900.0) -> tuple[bool, int | None, 
     if not meta_path.exists():
         return False, None, f"[error] kernel-metadata.json missing in {d}"
 
-    rc, raw = _run([_kaggle_bin(), "kernels", "push", "-p", str(d)], timeout=timeout_s)
+    # IOAI rule: the push MUST carry --timeout with the task's kernel limit, or
+    # a kernel that overruns is judged invalid. This is Kaggle's own run cap,
+    # separate from the subprocess timeout below (which only bounds the CLI call
+    # itself). Kaggle clamps to its global maximum, so an over-large value is
+    # safe; a missing one is not.
+    cmd = [_kaggle_bin(), "kernels", "push", "-p", str(d)]
+    if kernel_timeout_s is not None:
+        cmd += ["--timeout", str(int(kernel_timeout_s))]
+    rc, raw = _run(cmd, timeout=timeout_s)
     # The CLI exits 0 even when it prints "Kernel push error: ...", so the exit
     # code alone is not a success signal.
     ok = rc == 0 and "push error" not in raw.lower()

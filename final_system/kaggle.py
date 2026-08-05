@@ -344,7 +344,15 @@ class KaggleAdapter:
         except Exception as exc:  # noqa: BLE001
             self.resource_gate.release(lease_id)
             return SubmitResult(False, "rejected", f"kernel packaging failed: {exc}")
-        ok, version, raw = push_kernel(package)
+        # The Kaggle --timeout the rules require: the kernel's own run cap on
+        # Kaggle. Use the same ceiling we injected as IOAI_BUDGET_S so the
+        # declared budget, the injected wall-clock, and the platform kill are
+        # one number. Kaggle clamps to its global max.
+        kernel_cap_s = int(min(
+            runtime_minutes * 60,
+            float(self.kernel_timeout_s) if self.kernel_timeout_s else runtime_minutes * 60,
+        ))
+        ok, version, raw = push_kernel(package, kernel_timeout_s=kernel_cap_s)
         if not ok:
             self.resource_gate.release(lease_id)
             return SubmitResult(
