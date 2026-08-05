@@ -59,7 +59,7 @@ READY
   "source_lane": "{lane}",
   "submission_mode": "{submission_mode}",
   "accelerator": "p100",
-  "estimated_kernel_minutes": 35,
+  "estimated_kernel_minutes": 22,
   "purpose": "本候选相对上一个版本唯一改变了什么",
   "parent_id": "",
   "claimed_local_score": null
@@ -70,7 +70,11 @@ claimed score 只作笔记，Broker 永远从原始 OOF 重算。候选中不要
 checkpoint、凭证或软链接；若为 kernel 模式，必须在 Kaggle 上从官方挂载资产重新训练/推理。
 Kaggle CLI 实际只上传 metadata 指定的一个 `code_file`，因此它必须是完全独立的
 单文件脚本；不要让它 import 同目录的 helper。`estimated_kernel_minutes` 填保守的
-端到端运行时间，Broker 会据此阻止来不及在截止前完成的 Kernel。
+端到端运行时间，Broker 会据此阻止来不及在截止前完成的 Kernel。**本题计分 kernel
+的平台时限是 30 分钟(含 wheel 依赖安装),声明值必须留出余量(建议 ≤ 25);超过
+平台时限的 kernel 会被 Kaggle 硬杀,什么都留不下。** 脚本开头读取环境变量
+`IOAI_BUDGET_S`(Broker 注入的实际墙钟预算),先写出保底 submission 再迭代,预算
+耗尽立即写出当前最好结果。
 
 只读取 `FEEDBACK.jsonl` 中属于本路线的榜单反馈。持续做“假设→最低成本实验→公共
 标尺验证→保留/回退”的循环；不要在第一个可用解出现后结束。当前工作目录是

@@ -95,7 +95,9 @@ CONTRACT = """
   它必须在任何由它安装的 import 之前运行 —— pip 换不掉已经载入的模块，所以写在
   它上面的 import 会保留错误版本，而你只会从分数上看出来，不会收到报错。
 - 必须赶在截止前完成的是 submit 调用，不是评分。截止时仍在运行的 kernel 会跑完、
-  评分、然后不可见。给脚本设置独立的墙钟预算，超时就写出当时最好的 submission ——
+  评分、然后不可见。Kaggle 计分 kernel 还有平台时限(本题 30 分钟,含依赖安装),
+  在 `candidate.json` 里如实声明 `estimated_kernel_minutes`(≤25)。给脚本设置
+  独立的墙钟预算:开头读环境变量 `IOAI_BUDGET_S`,超时就写出当时最好的 submission ——
   Kaggle 无法取消正在运行的 kernel，它烧掉的配额属于当天的下一道题。
 
 # 硬规则（违反即失格，不只是低分）

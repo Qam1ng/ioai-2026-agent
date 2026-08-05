@@ -94,7 +94,8 @@ root = "workspace/final_system/_resource_pools"
 gpu_quota_hours = 30
 gpu_concurrency = 2
 cpu_concurrency = 5
-default_gpu_kernel_minutes = 45
+# 平台时限 30 分钟;默认声明必须低于它,留出安装+写盘余量
+default_gpu_kernel_minutes = 28
 default_cpu_kernel_minutes = 10
 kernel_start_margin_minutes = 5
 acquire_poll_seconds = 2
