@@ -194,6 +194,87 @@ class KaggleAdapter:
                 detail=f"{type(exc).__name__}: {str(exc)[:1000]}",
             )
 
+    def _resolve_datasets(self, refs: list) -> list:
+        """Turn `OWNER/slug` placeholders into the real owner.
+
+        A lane has no Kaggle credentials — the broker owns submission — so the
+        agent cannot look an owner up. The claude lane wrote
+        "REPLACE_OWNER/ioai-2026-wheel-dataset" and said so in its own notes.
+        That is the right call by the agent; copying it through verbatim was
+        the mistake, because the broker is the component that *can* resolve it.
+        """
+        import subprocess
+
+        from agent.tools.registry import _kaggle_bin
+        out = []
+        for raw in refs:
+            ref = str(raw).strip()
+            if not ref:
+                continue
+            owner, _, slug = ref.partition("/")
+            if slug and not re.search(r"REPLACE|PLACEHOLDER|<|>", owner, re.I):
+                out.append(ref)
+                continue
+            want = slug or owner
+            hit = None
+            try:
+                r = subprocess.run(
+                    [_kaggle_bin(), "datasets", "list", "-s", want],
+                    capture_output=True, text=True, timeout=90)
+                for line in r.stdout.splitlines():
+                    first = line.split()[0] if line.split() else ""
+                    if first.endswith("/" + want):
+                        hit = first
+                        break
+            except Exception:  # noqa: BLE001
+                hit = None
+            if hit:
+                print(f"[broker] resolved dataset {ref!r} -> {hit!r}", flush=True)
+                out.append(hit)
+            else:
+                print(f"[broker] could not resolve dataset {ref!r}; dropping it",
+                      flush=True)
+        return out
+
+    def _inject_budget(self, code: str, runtime_minutes: float) -> str:
+        """Tell the kernel how long it is actually allowed to run.
+
+        The lanes leave a hook — IOAI_BUDGET_S, defaulting to 6.5 hours — and
+        nothing ever set it, so a kernel planned for six and a half hours while
+        the broker gave up after 45 minutes and the whole run was two. Three
+        clocks, none aware of the others.
+        """
+        # The tightest of the three clocks, minus a margin to write output:
+        # the candidate's own declared runtime and the broker's wait ceiling.
+        ceiling = float(runtime_minutes) * 60
+        if self.kernel_timeout_s is not None:
+            ceiling = min(ceiling, float(self.kernel_timeout_s))
+        budget = max(300.0, ceiling - 240.0)
+        return (
+            "# Injected by the submission broker: the wall-clock this kernel is\n"
+            "# actually waited on. Without it the lane default (6.5h) wins and\n"
+            "# nothing downstream is still listening when it finishes.\n"
+            "import os as _ioai_os\n"
+            f"_ioai_os.environ.setdefault('IOAI_BUDGET_S', '{budget:.0f}')\n"
+        ) + code
+
+    def _score(self, record: dict) -> float | None:
+        """The candidate's own OOF score, if the shared ruler has produced one.
+
+        Used only to break ties in the day-gate queue so the best available
+        candidate takes the next GPU slot rather than whoever queued first. The
+        broker already sorts eligible candidates by score when it chooses one;
+        this carries that same order into slot contention, where it was absent.
+        """
+        ev = (record.get("evaluation") or {})
+        val = ev.get("mean")
+        if val is None:
+            val = ev.get("pooled")
+        try:
+            return float(val) if val is not None else None
+        except (TypeError, ValueError):
+            return None
+
     def _submit_kernel(
         self,
         record: dict,
@@ -234,6 +315,7 @@ class KaggleAdapter:
             accelerator=accelerator,
             estimated_seconds=runtime_minutes * 60,
             deadline_epoch=latest_start,
+            local_score=self._score(record),
         )
         if lease is None:
             return SubmitResult(False, gate_status, reason)
@@ -252,10 +334,12 @@ class KaggleAdapter:
                 broker_code_file,
                 self.slug,
                 accelerator,
-                dataset_sources=source_metadata.get("dataset_sources") or [],
+                dataset_sources=self._resolve_datasets(
+                    source_metadata.get("dataset_sources") or []),
                 kernel_sources=source_metadata.get("kernel_sources") or [],
                 model_sources=source_metadata.get("model_sources") or [],
             )
+            code = self._inject_budget(code, runtime_minutes)
             write_kernel(package, code, metadata)
         except Exception as exc:  # noqa: BLE001
             self.resource_gate.release(lease_id)

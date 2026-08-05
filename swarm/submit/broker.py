@@ -35,6 +35,7 @@ from ..budget import PodBudget, QuotaPool
 from ..bus import Blackboard
 from ..config import SwarmConfig
 from ..schemas import SubmissionRecord
+from agent.tools.registry import _kaggle_bin
 from .kernel import (
     estimate_gpu_seconds,
     make_metadata,
@@ -428,7 +429,7 @@ class SubmissionBroker:
         from .kernel import _run
 
         rc, out = _run(
-            ["kaggle", "competitions", "submissions", "-c", self.cfg.slug, "--csv"],
+            [_kaggle_bin(), "competitions", "submissions", "-c", self.cfg.slug, "--csv"],
             timeout=300,
         )
         if rc != 0 or not out:

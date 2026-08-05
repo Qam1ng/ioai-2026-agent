@@ -34,6 +34,11 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+# The Kaggle CLI is not on PATH for a detached launcher: ten of fifteen broker
+# submissions in the first live run died with "kaggle CLI not found on PATH"
+# while the binary sat in the venv beside sys.executable.
+from agent.tools.registry import _kaggle_bin
+
 #: accelerator label -> machine_shape string Kaggle expects
 ACCEL_MACHINE_SHAPE: dict[str, str] = {
     "cpu": "",
@@ -43,6 +48,11 @@ ACCEL_MACHINE_SHAPE: dict[str, str] = {
 
 #: Kaggle rejects kernel slugs beyond ~50 chars; stay comfortably inside.
 MAX_KERNEL_SLUG = 44
+#: Kaggle rejects kernel titles beyond ~50 characters with an opaque 400 on
+#: SaveKernel that names no field. Every push in the third live run failed this
+#: way; the account, the disk, competition_sources, the GPU and the wheel
+#: dataset were each cleared individually before the title was tried.
+MAX_KERNEL_TITLE = 44
 
 #: ``kernels push`` prints: "Kernel version 7 successfully pushed.  Please
 #: check progress at <url>" (kaggle 2.2.4, ``kernels_push_cli``).
@@ -159,6 +169,11 @@ def make_metadata(
     title = kernel_id.split("/", 1)[-1]
     if len(title) < 5:  # Kaggle rejects titles under five characters
         title = f"{title}-kernel"
+    if len(title) > MAX_KERNEL_TITLE:
+        # Truncate the id with it, or Kaggle warns that the title does not
+        # resolve to the id.
+        title = title[:MAX_KERNEL_TITLE]
+        kernel_id = f"{kernel_id.split('/', 1)[0]}/{title}"
     return {
         "id": kernel_id,
         "title": title,
@@ -223,7 +238,7 @@ def lookup_current_version(kernel_ref: str) -> int | None:
                 return int(v) or None
     except Exception:  # noqa: BLE001 - a lookup failure must not fail the push
         pass
-    _run(["kaggle", "kernels", "list", "-m", "-s", slug], timeout=120)
+    _run([_kaggle_bin(), "kernels", "list", "-m", "-s", slug], timeout=120)
     return None
 
 
@@ -239,7 +254,7 @@ def push_kernel(dir: Path, timeout_s: float = 900.0) -> tuple[bool, int | None, 
     if not meta_path.exists():
         return False, None, f"[error] kernel-metadata.json missing in {d}"
 
-    rc, raw = _run(["kaggle", "kernels", "push", "-p", str(d)], timeout=timeout_s)
+    rc, raw = _run([_kaggle_bin(), "kernels", "push", "-p", str(d)], timeout=timeout_s)
     # The CLI exits 0 even when it prints "Kernel push error: ...", so the exit
     # code alone is not a success signal.
     ok = rc == 0 and "push error" not in raw.lower()
@@ -264,11 +279,11 @@ def parse_status(raw: str) -> str | None:
 
 def fetch_log(kernel_ref: str, tail_chars: int = 8000) -> str:
     """Best-effort kernel log. ``kernels logs`` first, ``kernels output`` second."""
-    rc, raw = _run(["kaggle", "kernels", "logs", kernel_ref], timeout=300)
+    rc, raw = _run([_kaggle_bin(), "kernels", "logs", kernel_ref], timeout=300)
     if rc == 0 and raw and "usage:" not in raw[:200].lower():
         return raw[-tail_chars:]
     with tempfile.TemporaryDirectory() as tmp:
-        _run(["kaggle", "kernels", "output", kernel_ref, "-p", tmp], timeout=600)
+        _run([_kaggle_bin(), "kernels", "output", kernel_ref, "-p", tmp], timeout=600)
         logs = sorted(Path(tmp).glob("*.log"))
         if not logs:
             return raw[-tail_chars:] if raw else "[no log available]"
@@ -285,7 +300,7 @@ def fetch_log(kernel_ref: str, tail_chars: int = 8000) -> str:
 
 def kernel_status_once(ref: str) -> tuple[str, str]:
     """Read one remote status without turning a still-running job into an error."""
-    _rc, raw = _run(["kaggle", "kernels", "status", ref], timeout=180)
+    _rc, raw = _run([_kaggle_bin(), "kernels", "status", ref], timeout=180)
     status = parse_status(raw)
     if status in _TERMINAL:
         return _TERMINAL[status], raw
