@@ -237,6 +237,30 @@ def budget_line(b: Budget) -> str:
             f"submissions={b.submissions}/{b.max_submissions} " + cost)
 
 
+def _model_for(role: str, args) -> str:
+    """Which Claude model this role runs on.
+
+    HearSay is Claude Code, so every role here is a Claude model — GPT lives on
+    the codex lane, which is a different kernel. --solver-models maps a solver
+    letter to a model ("a=claude-fable-5,c=claude-opus-5"); --evaluator-model
+    sets the evaluator; anything unmapped falls back to --model. This lets a run
+    put opus on the one role that most needs it (the evaluator compiles the
+    shared ruler) and a cheaper model on the rest, without a global downgrade.
+    """
+    if role == "evaluator" and getattr(args, "evaluator_model", ""):
+        return args.evaluator_model
+    mapping = getattr(args, "_solver_model_map", None)
+    if mapping is None:
+        mapping = {}
+        for pair in (getattr(args, "solver_models", "") or "").split(","):
+            pair = pair.strip()
+            if "=" in pair:
+                k, v = pair.split("=", 1)
+                mapping[f"solver_{k.strip().lower()}"] = v.strip()
+        args._solver_model_map = mapping
+    return mapping.get(role, args.model)
+
+
 def opts(solver: str, ws: Path, args, budget: Budget, trace: Tracer,
          append: str, cost_cap: float) -> ClaudeAgentOptions:
     # The CLI refuses to start if cwd is missing, and it fails as a connection
@@ -349,7 +373,7 @@ def opts(solver: str, ws: Path, args, budget: Budget, trace: Tracer,
         return {}
 
     return ClaudeAgentOptions(
-        model=args.model,
+        model=_model_for(solver, args),
         # Preset KEPT, contract appended. Replacing it was our biggest
         # self-inflicted wound on the previous branch.
         system_prompt={"type": "preset", "preset": "claude_code", "append": append},
@@ -2342,7 +2366,9 @@ async def run(args) -> None:
            "kaggle says" if left is not None else
            "no quota reading — guessing")
     print(f"[boot] {whoami()}", flush=True)
-    print(f"[boot] model: {args.model}", flush=True)
+    roles = {n: _model_for(n, args) for n in names}
+    roles["evaluator"] = _model_for("evaluator", args)
+    print(f"[boot] models: {roles}", flush=True)
     print(f"[boot] submissions: {src} "
           + ("(HearSay may send 0 directly)" if args.external_broker_dir else
              f"{left if left is not None else '?'} left today ({used} sent "
@@ -2482,6 +2508,10 @@ def main() -> None:
                     help="when evaluator-recomputed local scores reach peers; "
                          "auto=live in competition, after-first in clean mode")
     ap.add_argument("--model", default=DEFAULT_MODEL)
+    ap.add_argument("--solver-models", default="",
+                    help="per-solver Claude models e.g. a=claude-fable-5,c=claude-opus-5")
+    ap.add_argument("--evaluator-model", default="",
+                    help="Claude model for the evaluator; empty uses --model")
     ap.add_argument("--effort", default="high",
                     choices=["low", "medium", "high", "xhigh", "max"])
     ap.add_argument("--solvers", type=int, default=3,
