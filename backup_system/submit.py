@@ -16,9 +16,11 @@ import re
 import shutil
 import subprocess
 import time
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 
+from agent.tools.registry import _kaggle_bin
 from swarm.submit.kernel import (
     make_metadata,
     poll_kernel,
@@ -150,17 +152,81 @@ class Kaggle:
     """The only object in this system allowed to authenticate to Kaggle."""
 
     def __init__(self, *, slug: str, root: Path, user: str, assets: Path,
-                 kernel_timeout_s: float):
+                 kernel_timeout_s: float, kernel_run_timeout_s: int | None = None):
         self.slug = slug
         self.root = Path(root)
         self.user = user
         self.assets = Path(assets)
+        #: How long we wait locally for a kernel to finish.
         self.kernel_timeout_s = kernel_timeout_s
+        #: The task's own stated limit, passed to Kaggle as `push --timeout`.
+        #: IOAI invalidates any solution pushed without it.
+        self.kernel_run_timeout_s = kernel_run_timeout_s
 
-    def remaining_today(self) -> int | None:
+    def submission_limits(self) -> dict:
+        """What Kaggle says about our budget. Also our proof the slug is real.
+
+        For these private competitions this is the ONE informative endpoint:
+        `competitions_list` returns nothing and `competition_get_settings` is
+        403, but submission-limits answers. A wrong slug fails here, which is
+        exactly the check we want before anything else runs.
+        """
+        try:
+            from kaggle.api.kaggle_api_extended import KaggleApi
+            api = KaggleApi()
+            api.authenticate()
+            value = api.competition_get_submission_limits(self.slug)
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"[:300]}
+        allowed = getattr(value, "num_allowed_now", None)
+        today = getattr(value, "num_today", None)
+        return {
+            "ok": isinstance(allowed, int),
+            "num_allowed_now": allowed if isinstance(allowed, int) else None,
+            "num_today": today if isinstance(today, int) else None,
+            "num_total": getattr(value, "num_total", None),
+            "limited_by_total": bool(getattr(value, "limited_by_total", False)),
+        }
+
+    def download_data(self, destination: Path) -> tuple[bool, str]:
+        """Fetch the competition data ourselves.
+
+        The rules list downloading the data as the agent's job, not the
+        operator's, so the system asks Kaggle for it rather than being handed a
+        directory that someone prepared by hand.
+        """
+        destination = Path(destination)
+        destination.mkdir(parents=True, exist_ok=True)
         try:
             done = subprocess.run(
-                ["kaggle", "competitions", "submission-limits", "--json", self.slug],
+                [_kaggle_bin(), "competitions", "download", "-c", self.slug,
+                 "-p", str(destination), "-o", "-q"],
+                capture_output=True, text=True, timeout=3600,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return False, f"{type(exc).__name__}: {exc}"
+        output = (done.stdout or "") + (done.stderr or "")
+        archives = sorted(destination.glob("*.zip"))
+        for archive in archives:
+            try:
+                with zipfile.ZipFile(archive) as bundle:
+                    bundle.extractall(destination)
+                archive.unlink()
+            except (zipfile.BadZipFile, OSError) as exc:
+                return False, f"could not unpack {archive.name}: {exc}"
+        files = [p for p in destination.rglob("*") if p.is_file()]
+        if not files:
+            return False, f"download produced no files: {output[-400:]}"
+        return True, f"{len(files)} files under {destination}"
+
+    def remaining_today(self) -> int | None:
+        limits = self.submission_limits()
+        if limits.get("ok"):
+            return max(0, int(limits["num_allowed_now"]))
+        try:
+            done = subprocess.run(
+                [_kaggle_bin(), "competitions", "submission-limits",
+                 "--json", self.slug],
                 capture_output=True, text=True, timeout=90,
             )
         except (OSError, subprocess.SubprocessError):
@@ -192,7 +258,11 @@ class Kaggle:
             make_metadata(ref, f"solution_{submission_id.replace('-', '_')}.py",
                           self.slug, accelerator),
         )
-        pushed, version, raw = push_kernel(package)
+        # --timeout is not optional: IOAI invalidates a solution pushed without
+        # it that then runs past the task's stated limit.
+        pushed, version, raw = push_kernel(
+            package, kernel_timeout_s=self.kernel_run_timeout_s
+        )
         if not pushed:
             return SubmitOutcome("retryable", f"kernel push failed: {raw[-600:]}")
 

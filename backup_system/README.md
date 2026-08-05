@@ -56,26 +56,57 @@ IOAI_LLM_API_KEY=<你的 key>
 python -m backup_system doctor
 ```
 
-离线排练（**不会**调用 Kaggle submit，不花任何额度）：
+### 正式赛：唯一入口是 Starter prompt
 
-```bash
-python -m backup_system run --task "practice-1=/abs/path/to/assets" --minutes 30
-```
-
-正式跑（必须显式加 `--live`）：
+按 IOAI 规则，操作员只被允许做一件事——**原样粘贴官方 Starter prompt**。所以正式
+入口就长这样，把每道题的 Starter prompt 存成一个文件（或用 `-` 走 stdin）：
 
 ```bash
 python -m backup_system run \
-  --task "task1-slug=/abs/path/task1-assets" \
-  --task "task2-slug=/abs/path/task2-assets" \
-  --task "task3-slug=/abs/path/task3-assets" \
-  --minutes 360 \
+  --starter-prompt /path/task1_starter.txt \
+  --starter-prompt /path/task2_starter.txt \
+  --starter-prompt /path/task3_starter.txt \
   --kaggle-user YOUR_KAGGLE_USER \
   --live
 ```
 
-`--live` 时会先查每题的 Kaggle remaining-today，取它和 `max_submissions` 的较小值；
-查不到就直接失败，不会猜一个新的 50 次预算。
+slug、kernel 时限、截止时间全部由系统自己从文本里读，数据由系统自己下载。**不需要
+`--assets-dir`，不需要 `--slug`，不需要 `--minutes`**（题面里没有绝对截止时间时才
+用 `--minutes` 兜底，届时会在日志里标成 `deadline_source=operator_minutes`）。
+
+实测一遍（真 Starter prompt + 真 Kaggle 校验）：
+
+```
+slug                     ioai-2026-ai-models-track-practice-task-1   ← 从散文里的 URL 抠出
+kernel_timeout_seconds   1800                                        ← "30 minutes" 换算
+deadline_source          operator_minutes                            ← 题面只说 "before the round closes"
+max_submissions          50                                          ← 来自 Kaggle，不信题面
+starter prompt 逐字节保留 True
+```
+
+### 离线排练
+
+```bash
+python -m backup_system run --task "slug=/abs/path/assets" \
+  --kernel-timeout-seconds 1800 --minutes 30
+```
+
+`--task` 明确只用于排练：它接受一个别人准备好的数据目录，而规则把下载数据划给
+agent，所以 `--task` 配 `--live` 会被直接拒绝。
+
+## 规则合规
+
+| IOAI 规则 | 本系统 |
+|---|---|
+| 操作员只粘贴 Starter prompt | ✅ `--starter-prompt`，其余全部自解析 |
+| agent 自己下载数据 | ✅ `Kaggle.download_data()`，`--live` 时开跑前执行 |
+| push 必须带 `--timeout` | ✅ 从题面读出的秒数传给 `kernels push --timeout`；实测 Kaggle 接受 `--timeout 0`，所以非正值在本地就被拒 |
+| kernel 跑完后再提交 | ✅ 下载产物→对模板校验→`competition_submit_code` pin 精确 version |
+| 提交代码顶部要有 Report | ✅ Starter prompt 原文透传给 solver，该要求随原文到达 |
+| 不得 hack 提交系统 / 拿隐藏标签 | ✅ 写进每个 agent prompt 的硬边界 |
+
+**读不到就不跑**：题面里没有可用的 kernel 时限时，系统拒绝启动而不是猜一个值——
+少跑一轮总好过整批提交作废。
 
 ## LLM 接线（已实测 200）
 

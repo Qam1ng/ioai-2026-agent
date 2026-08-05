@@ -36,10 +36,12 @@ class TaskPart:
     """Everything that happens for one competition slug."""
 
     def __init__(
-        self, *, slug: str, assets: Path, root: Path, config: BackupConfig,
+        self, *, task, assets: Path, root: Path, config: BackupConfig,
         kaggle_slots: asyncio.Semaphore, deadline: float, live: bool,
         kaggle_user: str, max_submissions: int,
     ):
+        self.task = task
+        slug = task.slug
         self.slug = slug
         self.assets = Path(assets).resolve()
         self.config = config
@@ -52,7 +54,8 @@ class TaskPart:
         self.kaggle = (
             Kaggle(slug=slug, root=Path(root) / "kaggle", user=kaggle_user,
                    assets=self.assets,
-                   kernel_timeout_s=config.run.kernel_timeout_minutes * 60)
+                   kernel_timeout_s=config.run.kernel_timeout_minutes * 60,
+                   kernel_run_timeout_s=task.kernel_timeout_seconds)
             if live else DryRunKaggle(slug, Path(root) / "kaggle", self.assets)
         )
         self._stop = asyncio.Event()
@@ -98,6 +101,8 @@ class TaskPart:
                     feedback_path=self.board.feedback_path,
                     minutes_left=self._minutes_left(),
                     board=self.board.digest(),
+                    starter_prompt=self.task.raw_prompt,
+                    kernel_timeout_seconds=self.task.kernel_timeout_seconds,
                 )
             try:
                 result = await runner.run(

@@ -6,6 +6,7 @@ import asyncio
 import csv
 import json
 import sys
+from datetime import UTC, datetime
 import time
 from pathlib import Path
 
@@ -426,3 +427,169 @@ def test_the_api_key_never_appears_in_any_tracked_file() -> None:
     for path in (CONFIG, ROOT / ".env.example",
                  ROOT / "backup_system" / "README.md"):
         assert secret not in path.read_text(), f"key leaked into {path}"
+
+
+# ------------------------------------------------------- IOAI rule compliance
+from backup_system.intake import (  # noqa: E402
+    IntakeError,
+    build_task,
+    coerce_timeout,
+    extract_json,
+    parse_deadline,
+)
+from backup_system.submit import Kaggle  # noqa: E402
+
+_LIMITS = {"num_allowed_now": 50, "num_today": 0}
+
+
+def test_push_passes_the_kernel_timeout_flag_ioai_requires() -> None:
+    """A solution pushed without --timeout is invalid however well it scores."""
+    import inspect
+    from swarm.submit import kernel as k
+    source = inspect.getsource(k.push_kernel)
+    assert "--timeout" in source or '"-t"' in source
+    assert "kernel_timeout_s" in inspect.signature(k.push_kernel).parameters
+
+
+def test_backup_adapter_actually_forwards_the_task_time_limit() -> None:
+    import inspect
+    source = inspect.getsource(Kaggle.submit)
+    assert "kernel_timeout_s=self.kernel_run_timeout_s" in source
+
+
+def test_intake_refuses_to_start_without_a_kernel_time_limit() -> None:
+    with pytest.raises(IntakeError, match="kernel time limit"):
+        build_task({"slug": "some-comp", "deadline_iso": "2099-01-01T00:00:00+00:00"},
+                   raw_prompt="x", limits=_LIMITS, fallback_minutes=60)
+
+
+def test_intake_refuses_an_implausible_slug() -> None:
+    with pytest.raises(IntakeError, match="slug"):
+        build_task({"slug": "https://kaggle.com/c/foo", "kernel_timeout_seconds": 60},
+                   raw_prompt="x", limits=_LIMITS, fallback_minutes=60)
+
+
+def test_intake_refuses_a_timeout_beyond_kaggles_own_ceiling() -> None:
+    assert coerce_timeout(13 * 3600) is None
+    assert coerce_timeout(0) is None
+    assert coerce_timeout("3600") == 3600
+
+
+def test_a_deadline_without_a_timezone_is_refused_not_guessed() -> None:
+    assert parse_deadline("2026-08-04T14:00:00") is None
+    assert parse_deadline("2026-08-04T14:00:00Z") is not None
+    assert parse_deadline("tomorrow afternoon") is None
+
+
+def test_deadline_falls_back_to_the_operator_window_only_when_named() -> None:
+    task = build_task(
+        {"slug": "comp-x", "kernel_timeout_seconds": 1800},
+        raw_prompt="x", limits=_LIMITS, fallback_minutes=90,
+    )
+    assert task.deadline_source == "operator_minutes"
+    assert 89 <= task.minutes_left() <= 90
+    with pytest.raises(IntakeError, match="deadline"):
+        build_task({"slug": "comp-x", "kernel_timeout_seconds": 1800},
+                   raw_prompt="x", limits=_LIMITS, fallback_minutes=None)
+
+
+def test_an_absolute_deadline_in_the_prompt_wins_over_the_operator() -> None:
+    import time as _t
+    future = datetime.fromtimestamp(_t.time() + 7200, UTC).isoformat()
+    task = build_task(
+        {"slug": "comp-x", "kernel_timeout_seconds": 1800, "deadline_iso": future},
+        raw_prompt="x", limits=_LIMITS, fallback_minutes=10,
+    )
+    assert task.deadline_source == "starter_prompt"
+    assert 119 <= task.minutes_left() <= 120
+
+
+def test_the_budget_comes_from_kaggle_not_from_the_task_text() -> None:
+    task = build_task(
+        {"slug": "comp-x", "kernel_timeout_seconds": 900,
+         "max_submissions": 999},              # the text does not get a vote
+        raw_prompt="x", limits={"num_allowed_now": 7, "num_today": 3},
+        fallback_minutes=60,
+    )
+    assert task.max_submissions == 7
+    assert task.submissions_used_today == 3
+    with pytest.raises(IntakeError, match="budget"):
+        build_task({"slug": "comp-x", "kernel_timeout_seconds": 900},
+                   raw_prompt="x", limits={"num_allowed_now": None},
+                   fallback_minutes=60)
+
+
+def test_the_starter_prompt_reaches_the_solver_verbatim() -> None:
+    """Report instructions we never anticipated must survive intake untouched."""
+    starter = ("SOLVE THIS TASK.\n"
+               "Your submitted code MUST begin with a short Report describing it.\n"
+               "Kernel time limit: 9 hours.")
+    from backup_system.prompts import solver_prompt as sp
+    text = sp(agent="codex", peer="claude", slug="c", workdir=Path("/w"),
+              candidates_dir=Path("/w/c"), assets_dir=Path("/a"),
+              feedback_path=Path("/w/f.jsonl"), minutes_left=60, board="-",
+              starter_prompt=starter, kernel_timeout_seconds=32400)
+    for line in starter.splitlines():
+        assert line in text, f"starter prompt line was lost: {line!r}"
+    assert "32400" in text
+
+
+def test_the_system_downloads_the_data_itself() -> None:
+    """The rules make this the agent's step one, not the operator's."""
+    import inspect
+    assert "competitions" in inspect.getsource(Kaggle.download_data)
+    assert "download" in inspect.getsource(Kaggle.download_data)
+    from backup_system.run import BackupRun as _BR
+    assert "download_data" in inspect.getsource(_BR.fetch_data)
+
+
+def test_live_runs_refuse_the_operator_prepared_data_path() -> None:
+    """--task hands over a directory a human built; a scored run may not."""
+    import subprocess
+    done = subprocess.run(
+        [sys.executable, "-m", "backup_system", "run",
+         "--task", f"slug={ROOT}", "--kernel-timeout-seconds", "60", "--live",
+         "--kaggle-user", "someone"],
+        capture_output=True, text=True, cwd=ROOT, timeout=120,
+    )
+    assert done.returncode != 0
+    assert "rehearsal path" in done.stderr
+
+
+def test_rehearsal_still_demands_a_kernel_timeout() -> None:
+    import subprocess
+    done = subprocess.run(
+        [sys.executable, "-m", "backup_system", "run", "--task", f"slug={ROOT}"],
+        capture_output=True, text=True, cwd=ROOT, timeout=120,
+    )
+    assert done.returncode != 0
+    assert "kernel-timeout-seconds" in done.stderr
+
+
+def test_every_agent_prompt_states_the_scoring_goal_and_its_two_hard_limits() -> None:
+    """Being told to be resourceful is useless if it gets the entry disqualified."""
+    from backup_system.prompts import INTAKE_PROMPT, manager_prompt
+    from backup_system.prompts import solver_prompt as sp
+    solver = sp(agent="codex", peer="claude", slug="c", workdir=Path("/w"),
+                candidates_dir=Path("/w/c"), assets_dir=Path("/a"),
+                feedback_path=Path("/w/f"), minutes_left=60, board="-")
+    manager = manager_prompt(slug="c", board="-", candidates="-",
+                             minutes_left=60, remaining=10)
+    for name, text in (("solver", solver), ("manager", manager)):
+        assert "排行榜分数做到最高" in text, f"{name} prompt lost the goal"
+        assert "绕过 Kaggle 的提交系统" in text, f"{name} prompt lost the rule boundary"
+        assert "隐藏测试集的标签" in text, f"{name} prompt lost the label boundary"
+    assert "取得尽可能高的排行榜分数" in INTAKE_PROMPT
+
+
+def test_a_zero_timeout_is_refused_before_it_reaches_kaggle() -> None:
+    """Measured: Kaggle happily accepts `--timeout 0`, which is the invalid state."""
+    from swarm.submit.kernel import push_kernel
+    import tempfile, json as _json
+    with tempfile.TemporaryDirectory() as tmp:
+        d = Path(tmp)
+        (d / "kernel-metadata.json").write_text(_json.dumps({"id": "u/k"}))
+        (d / "solution.py").write_text("print(1)\n")
+        for bad in (0, -30):
+            ok, _v, raw = push_kernel(d, kernel_timeout_s=bad)
+            assert not ok and "positive" in raw

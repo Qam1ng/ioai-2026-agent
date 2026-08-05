@@ -14,6 +14,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backup_system.config import BackupConfig  # noqa: E402
+from backup_system.intake import offline_task, read_starter_prompt  # noqa: E402
 from backup_system.run import BackupRun  # noqa: E402
 
 
@@ -120,13 +121,33 @@ def doctor(config: BackupConfig) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser("backup_system")
+    parser = argparse.ArgumentParser(
+        "backup_system",
+        description="IOAI backup system. The operator pastes each task's exact "
+                    "Starter prompt; the system does everything else.",
+    )
     parser.add_argument("command", choices=["doctor", "run"])
     parser.add_argument("--config", default=str(ROOT / "configs" / "backup_system.toml"))
-    parser.add_argument("--task", action="append", type=_parse_task, default=[],
-                        metavar="SLUG=ASSETS_DIR",
-                        help="repeat once per problem, up to three")
-    parser.add_argument("--minutes", type=float, default=120)
+    parser.add_argument(
+        "--starter-prompt", action="append", default=[], metavar="PATH",
+        help="path to a file holding one task's exact Starter prompt, or '-' for "
+             "stdin. Repeat once per problem, up to three. This is the real entry "
+             "point: slug, deadline and kernel time limit are read from the text "
+             "and the data is downloaded by the system.",
+    )
+    parser.add_argument(
+        "--task", action="append", type=_parse_task, default=[],
+        metavar="SLUG=ASSETS_DIR",
+        help="REHEARSAL ONLY. Skips intake and uses a directory somebody already "
+             "prepared, which is not how a scored run may be started.",
+    )
+    parser.add_argument(
+        "--kernel-timeout-seconds", type=int, default=0,
+        help="rehearsal only: the run-time cap --task mode cannot read from a prompt",
+    )
+    parser.add_argument("--minutes", type=float, default=0,
+                        help="fallback window, used only when the Starter prompt "
+                             "carries no absolute deadline")
     parser.add_argument("--kaggle-user", default="")
     parser.add_argument("--run-id", default="")
     parser.add_argument("--live", action="store_true",
@@ -137,20 +158,43 @@ def main() -> int:
     if args.command == "doctor":
         return doctor(config)
 
-    if not args.task:
-        parser.error("run requires at least one --task SLUG=ASSETS_DIR")
-    if len(args.task) > 3:
-        parser.error("a competition day has three problems; --task given more than three times")
+    if not args.starter_prompt and not args.task:
+        parser.error("run requires --starter-prompt PATH (or --task for a rehearsal)")
+    if len(args.starter_prompt) + len(args.task) > 3:
+        parser.error("a competition day has three problems; more than three given")
     if args.live and not os.environ.get(config.run.api_key_env):
         parser.error(
-            f"{config.run.api_key_env} is empty; export your OpenRouter key before --live"
+            f"{config.run.api_key_env} is empty; set it in .env before --live"
+        )
+    if args.task and not args.kernel_timeout_seconds:
+        parser.error(
+            "--task cannot read a time limit from a prompt, so "
+            "--kernel-timeout-seconds is required with it. Kaggle pushes without "
+            "a --timeout produce invalid IOAI solutions."
+        )
+    if args.task and args.live:
+        parser.error(
+            "--task is a rehearsal path: it takes data a human prepared, which "
+            "the rules assign to the agent. Use --starter-prompt for a scored run."
         )
 
     run = BackupRun(
-        config=config, tasks=args.task, minutes=args.minutes, live=args.live,
-        kaggle_user=args.kaggle_user, run_id=args.run_id,
+        config=config, live=args.live, kaggle_user=args.kaggle_user,
+        run_id=args.run_id, fallback_minutes=args.minutes or None,
     )
-    status = asyncio.run(run.execute())
+    prompts = [read_starter_prompt(source) for source in args.starter_prompt]
+    prepared = [
+        (
+            offline_task(
+                slug=slug, kernel_timeout_seconds=args.kernel_timeout_seconds,
+                minutes=args.minutes or 30,
+                max_submissions=config.run.max_submissions,
+            ),
+            assets,
+        )
+        for slug, assets in args.task
+    ]
+    status = asyncio.run(run.execute(prompts, prepared))
     print(json.dumps(status, ensure_ascii=False, indent=2))
     return 0
 

@@ -18,6 +18,16 @@ Kaggle 会在它自己的机器上**重新运行**这个脚本，用它写出的
 - 不能上传你在本地训练好的权重，模型必须在脚本里现场训练或用题目自带的资产；
 - **Kaggle 只上传一个文件**。辅助模块不会被一起打包，必须内联进同一个脚本；
 - 脚本必须在 Kaggle 的时限内跑完，训练加推理一起算。
+
+# 你的最终目标
+
+你唯一的目标是**把这道题的排行榜分数做到最高**。要主动、要把手上一切能用的都用上：
+题目自带的预训练模型和资产、全部提交额度、剩余的每一分钟、另一条线已经做出来的东西、
+公开的方法和文献。不要保守，不要因为一个想法不常规就放弃它——分数是唯一的评判。
+
+唯一的边界是官方规则划的两条线：**不得攻击或绕过 Kaggle 的提交系统，不得设法获取
+隐藏测试集的标签**。这两条不是道德提醒，是算术：违规的提交会被直接判无效，那是 0 分，
+比任何保守方案都差。除此之外，题目允许你碰的东西你都应该用足。
 """
 
 _SKELETON = '''```python
@@ -70,11 +80,73 @@ if __name__ == "__main__":
 ```'''
 
 
+INTAKE_PROMPT = """你是 IOAI 系统的 task intake。整个系统的最终目标是在这道 IOAI 题上
+取得尽可能高的排行榜分数；你这一步直接决定后面能不能跑——读错 slug 会连不上比赛，
+读错 kernel 时限会让每一次提交作废。所以宁可拒绝启动，也不要给出一个猜的值。
+
+人类操作员刚刚原样粘贴了一段官方 Starter prompt。你的唯一工作是从这段文本里读出
+确定性组件需要的机器值，然后停下。
+
+你不解题、不写代码、不总结题面。文本会原样交给后面的解题 agent，所以你**不需要**
+替它们理解任何东西。
+
+必须读出三个值：
+
+1. `slug` —— Kaggle 比赛的 URL 后缀（`kaggle.com/c/<slug>` 里的那一段）。必须精确，
+   不要带 `https://`、不要带 `/c/`、不要自己造。
+2. `kernel_timeout_seconds` —— 题目规定的 kernel 运行时限，**换算成秒**。文本里可能
+   写成"9 hours"、"30 minutes"、"kernel must complete within 3600s"之类。这个值是
+   硬性的：提交时必须作为 `kaggle kernels push --timeout` 传给 Kaggle，缺了这个 flag
+   而超时的方案会被判无效。读不到就填 null，不要猜。
+3. `deadline_iso` —— 比赛截止时间，ISO 8601 带时区，例如 `2026-08-04T14:00:00+00:00`。
+   文本里若只给了相对时长（"你有 2 小时"），填 null；若给的时间没有时区信息，也填
+   null——差一个时区就等于在截止后提交。
+
+只输出一个 JSON 对象，不要 Markdown，不要解释：
+
+{{
+  "slug": "...",
+  "kernel_timeout_seconds": 3600,
+  "deadline_iso": "2026-08-04T14:00:00+00:00",
+  "notes": "任何你认为下游需要知道、但不属于上面三项的硬约束，200 字以内"
+}}
+
+读不到的字段填 `null`，不要编造。宁可让系统拒绝启动，也不要用一个猜的值去跑——
+猜错 timeout 的代价是整个提交作废。
+
+# 以下是操作员粘贴的 Starter prompt 原文
+
+%(starter_prompt)s
+"""
+
+
 def solver_prompt(
     *, agent: str, peer: str, slug: str, workdir: Path, candidates_dir: Path,
     assets_dir: Path, feedback_path: Path, minutes_left: float, board: str,
+    starter_prompt: str = "", kernel_timeout_seconds: int | None = None,
 ) -> str:
+    official = (
+        f"""
+# 官方 Starter prompt（原文，未经任何删改）
+
+下面这段是比赛方给的原始任务说明。它高于本 prompt 里的任何其他描述；如果两者冲突，
+以它为准。里面对提交内容的要求（例如代码顶部要带一段 Report）你必须照做。
+
+--- BEGIN OFFICIAL STARTER PROMPT ---
+{starter_prompt.strip()}
+--- END OFFICIAL STARTER PROMPT ---
+"""
+        if starter_prompt.strip() else ""
+    )
+    budget = (
+        f"\n你的 kernel 在 Kaggle 上最多只能跑 {kernel_timeout_seconds} 秒"
+        f"（约 {kernel_timeout_seconds / 60:.0f} 分钟）。这是题目规定的硬上限，系统会用"
+        f" `push --timeout` 强制它。训练加推理必须在这个时间内跑完，超时的 kernel 会被"
+        f"杀掉，那次提交就白花了。\n"
+        if kernel_timeout_seconds else ""
+    )
     return f"""{IOAI}
+{official}{budget}
 
 # 你是谁
 

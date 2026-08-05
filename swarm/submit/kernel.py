@@ -242,19 +242,45 @@ def lookup_current_version(kernel_ref: str) -> int | None:
     return None
 
 
-def push_kernel(dir: Path, timeout_s: float = 900.0) -> tuple[bool, int | None, str]:
+def push_kernel(
+    dir: Path,
+    timeout_s: float = 900.0,
+    *,
+    kernel_timeout_s: float | None = None,
+) -> tuple[bool, int | None, str]:
     """Push a kernel directory. Returns ``(ok, version, raw_output)``.
 
     ``version`` is what ``competition_submit_code`` needs; submitting without
     it silently scores whatever version Kaggle considers current, which under
     parallel candidates is a coin flip.
+
+    ``kernel_timeout_s`` becomes ``kernels push --timeout``, the run-time cap
+    Kaggle enforces on the kernel itself. IOAI requires it — "solutions which
+    do not pass this flag and exceed the time limit will be invalid" — and it
+    is also the only thing that makes the stated limit real: Kaggle's own
+    ceiling for a GPU kernel is hours, so an overrunning kernel without this
+    flag does not stop at the task limit. It keeps running, burns the weekly
+    GPU quota, and holds one of the two account-wide GPU slots the whole time.
+    ``timeout_s`` is unrelated: that one bounds our local CLI call.
     """
     d = Path(dir)
     meta_path = d / "kernel-metadata.json"
     if not meta_path.exists():
         return False, None, f"[error] kernel-metadata.json missing in {d}"
 
-    rc, raw = _run([_kaggle_bin(), "kernels", "push", "-p", str(d)], timeout=timeout_s)
+    command = [_kaggle_bin(), "kernels", "push", "-p", str(d)]
+    if kernel_timeout_s is not None:
+        # Measured: Kaggle accepts `--timeout 0` without complaint, so a zero or
+        # negative value that slipped through upstream would push a kernel whose
+        # stated cap means nothing -- the exact state IOAI invalidates. Refuse
+        # here rather than discover it from a scored submission.
+        if int(kernel_timeout_s) <= 0:
+            return False, None, (
+                f"[error] kernel_timeout_s must be a positive number of seconds, "
+                f"got {kernel_timeout_s!r}"
+            )
+        command += ["--timeout", str(int(kernel_timeout_s))]
+    rc, raw = _run(command, timeout=timeout_s)
     # The CLI exits 0 even when it prints "Kernel push error: ...", so the exit
     # code alone is not a success signal.
     ok = rc == 0 and "push error" not in raw.lower()
