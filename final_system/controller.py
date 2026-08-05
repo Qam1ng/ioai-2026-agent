@@ -25,6 +25,7 @@ from search_system.ioai_agent_system.search_orchestrator import (
 
 from agent.tools.registry import _kaggle_bin
 
+from .anthropic_shim import AnthropicShim
 from .broker import SubmissionBroker
 from .calibration import FeedbackCalibrator
 from .config import SystemConfig
@@ -134,6 +135,8 @@ class FinalController:
         self.gateway_root = self.session / "kaggle_gateway"
         self._gateway: KaggleReadOnlyGateway | None = None
         self._tool_bin_dir: Path | None = None
+        self._anthropic_shim: AnthropicShim | None = None
+        self._anthropic_base_url = ""
 
     def _event(self, event: str, **payload: Any) -> None:
         append_jsonl(self.events, {"timestamp": time.time(), "event": event, **payload})
@@ -149,6 +152,8 @@ class FinalController:
             profile_dir=profile_dir,
             sandbox=sandbox or self._agent_sandbox,
             tool_bin_dir=self._tool_bin_dir,
+            anthropic_base_url=self._anthropic_base_url,
+            api_key_env=c.api_key_env,
             **({"allowed_tools": allowed_tools} if allowed_tools is not None else {}),
         )
 
@@ -361,6 +366,21 @@ class FinalController:
 
     def _report_candidate_record(self, record: dict) -> None:
         evaluation = record.get("evaluation", {})
+        warnings = list(record.get("kernel_format", {}).get("warnings") or [])
+        if warnings:
+            # Non-blocking, but the lane has to hear it: a kernel with no Report
+            # block still scores and still loses the Report grade, and only the
+            # lane can fix that in the next candidate.
+            self._candidate_feedback(
+                record["source_lane"],
+                {
+                    "candidate_id": record.get("candidate_id"),
+                    "status": record.get("status"),
+                    "warnings": warnings,
+                    "action": "keep this candidate; add the Report block at the "
+                              "top of the kernel script in the next version",
+                },
+            )
         if record.get("status") == "eligible" and evaluation.get("status") in {
             "ok", "pending_contract",
         }:
@@ -427,9 +447,18 @@ class FinalController:
         }
         home = self.hearsay_ws / ".agent_home"; home.mkdir(parents=True, exist_ok=True)
         env["HOME"] = str(home)
-        env["CLAUDE_CONFIG_DIR"] = str(
-            self.config.claude.integrated_profile_dir
-        )
+        # Same auth choice as the direct lanes: with a gateway configured the
+        # SDK gets the key and the shim URL, and never a subscription profile.
+        api_key = os.environ.get(self.config.claude.api_key_env, "").strip()
+        if self._anthropic_base_url and api_key:
+            env["ANTHROPIC_API_KEY"] = api_key
+            env["ANTHROPIC_BASE_URL"] = self._anthropic_base_url
+        else:
+            env["CLAUDE_CONFIG_DIR"] = str(
+                self.config.claude.integrated_profile_dir
+            )
+        if self._tool_bin_dir is not None:
+            env["PATH"] = f"{self._tool_bin_dir}:{env.get('PATH', '')}".rstrip(":")
         env["PYTHONUNBUFFERED"] = "1"
         # One auth source, never both — see the note in runners.py.
         api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
@@ -862,6 +891,19 @@ class FinalController:
 
     async def run(self) -> Path:
         self._prepare()
+        if self.config.claude.anthropic_base_url:
+            self._anthropic_shim = AnthropicShim(
+                self.config.claude.anthropic_base_url,
+                on_event=lambda **payload: self._event(
+                    "anthropic_shim_upstream_error", **payload
+                ),
+            )
+            self._anthropic_base_url = self._anthropic_shim.start()
+            self._event(
+                "anthropic_shim_started",
+                upstream=self.config.claude.anthropic_base_url,
+                base_url=self._anthropic_base_url,
+            )
         # IOAI requires the system to fetch its own data. The credential stays
         # outside the sandbox; agents get a shim that can only read.
         self._gateway = KaggleReadOnlyGateway(
@@ -1140,6 +1182,9 @@ class FinalController:
             if self._gateway is not None:
                 await self._gateway.stop()
                 self._gateway = None
+            if self._anthropic_shim is not None:
+                self._anthropic_shim.stop()
+                self._anthropic_shim = None
             await asyncio.gather(
                 codex_runner.terminate_all(), claude_runner.terminate_all(),
                 *(

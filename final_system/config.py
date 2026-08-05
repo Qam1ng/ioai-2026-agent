@@ -56,6 +56,10 @@ class ClaudeConfig:
     binary: Path
     model: str
     effort: str
+    # Non-empty routes every Claude role through the local Anthropic shim onto
+    # this Anthropic-native gateway instead of a subscription profile.
+    anthropic_base_url: str
+    api_key_env: str
     integrated_profile_dir: Path
     direct_profile_dir: Path
     turn_minutes: float
@@ -215,6 +219,8 @@ class SystemConfig:
                 binary=Path(claude.get("binary", "/opt/homebrew/bin/claude")),
                 model=str(claude.get("model", "claude-fable-5")),
                 effort=str(claude.get("effort", "high")),
+                anthropic_base_url=str(claude.get("anthropic_base_url", "")),
+                api_key_env=str(claude.get("api_key_env", "ANTHROPIC_API_KEY")),
                 integrated_profile_dir=integrated_profile.resolve(),
                 direct_profile_dir=direct_profile.resolve(),
                 turn_minutes=float(claude.get("turn_minutes", 45)),

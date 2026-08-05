@@ -63,6 +63,13 @@ binary = "/opt/homebrew/bin/claude"
 model = "claude-fable-5"
 effort = "high"
 
+# Azure AI Foundry 的 /anthropic 就是 Anthropic 原生 Messages API，Claude Code 可以
+# 直接跑在上面——只是它会多发 `anthropic-beta` 头和 `context_management` 字段，网关
+# 一律 400。controller 会在本地起一个 shim 把这两样剥掉再转发（实测 opus-5 /
+# fable-5 的 tool_use 都能完整往返）。留空则回退到 Max 订阅 profile。
+anthropic_base_url = "https://prosgrow-aoai-prod.services.ai.azure.com/anthropic"
+api_key_env = "AZURE_OPENAI_API_KEY"
+
 # 可填同一路径；若有两个 Max 账号，分开后一次 usage limit 不会同时击穿主线和兜底线。
 # 先分别用 `CLAUDE_CONFIG_DIR=<dir> claude /login` 登录。Agent HOME 仍另行隔离。
 integrated_profile_dir = "~/.claude-ioai-integrated"

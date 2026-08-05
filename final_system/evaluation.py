@@ -396,10 +396,9 @@ def validate_kernel_package(candidate_root: Path) -> dict:
         errors.append(f"kernel code_file is missing: {code_name}")
     elif code_path.suffix.lower() != ".py":
         errors.append("formal IOAI kernel code_file must be a plain .py script")
-    else:
-        problem = _report_header_problem(code_path)
-        if problem:
-            errors.append(problem)
+    report_warning = (
+        _report_header_problem(code_path) if code_path.is_file() else ""
+    )
     if metadata and metadata.get("kernel_type", "script") != "script":
         errors.append("kernel_type must be script")
     if metadata and metadata.get("language", "python") != "python":
@@ -424,6 +423,12 @@ def validate_kernel_package(candidate_root: Path) -> dict:
     return {
         "valid": not errors,
         "errors": errors,
+        # A missing Report costs the Report grade, and IOAI documents a recovery
+        # for it (Report Generation prompt, then a Late Submission). Blocking the
+        # push instead would trade that recoverable loss for an unrecoverable
+        # one — the score itself. So it is surfaced to the lane as feedback and
+        # never gates a submission.
+        "warnings": [report_warning] if report_warning else [],
         "source": str(source),
         "code_file": code_name,
         "metadata": metadata,

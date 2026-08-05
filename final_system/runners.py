@@ -86,8 +86,12 @@ class ClaudeSubscriptionRunner(_ProcessRunner):
         allowed_tools: str = "Bash,Read,Edit,Write,Glob,Grep,WebSearch,WebFetch",
         sandbox: AgentSandbox | None = None,
         tool_bin_dir: Path | None = None,
+        anthropic_base_url: str = "",
+        api_key_env: str = "ANTHROPIC_API_KEY",
     ):
         super().__init__()
+        self.anthropic_base_url = anthropic_base_url
+        self.api_key_env = api_key_env
         self.binary = Path(binary)
         self.model = model
         self.effort = effort
@@ -121,8 +125,14 @@ class ClaudeSubscriptionRunner(_ProcessRunner):
         # there is nothing for the CLI to prefer. It also sidesteps `--bare`,
         # which skips keychain reads: 12 of 12 rounds returned "Not logged in"
         # while the HearSay lane, started without --bare, ran fine throughout.
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-        if api_key:
+        api_key = os.environ.get(self.api_key_env, "").strip()
+        if api_key and self.anthropic_base_url:
+            # Gateway path: the shim owns the URL, the key travels as
+            # x-api-key. CLAUDE_CONFIG_DIR stays unset so the CLI cannot prefer
+            # a subscription profile over it.
+            env["ANTHROPIC_API_KEY"] = api_key
+            env["ANTHROPIC_BASE_URL"] = self.anthropic_base_url
+        elif api_key:
             env["ANTHROPIC_API_KEY"] = api_key
         else:
             env["CLAUDE_CONFIG_DIR"] = str(self.profile_dir)
