@@ -1,0 +1,60 @@
+# 30-minute rehearsal profile on Claude Opus 4.8.
+# Judgement roles on the API path, code roles (coder/tuner/aggregator/verifier)
+# as headless Claude Code -- both on the same brain. Wall clock is the real
+# budget; the cost cap only guards against runaway.
+
+deadline_min: 30
+max_cost_usd: 120
+gpu_quota_hours: 30
+kaggle_user: jingyuanzhang1018
+dry_run: false
+
+default_model:
+  backend: claude
+  model: claude-opus-4-8
+  max_tokens: 16000
+
+models:
+  manager:
+    backend: claude
+    model: claude-opus-4-8
+    max_tokens: 8000
+  verifier:
+    backend: claude_code
+    model: claude-opus-4-8
+    max_tokens: 32000
+  coder:
+    backend: claude_code
+    model: claude-opus-4-8
+    max_tokens: 32000
+  tuner:
+    backend: claude_code
+    model: claude-opus-4-8
+    max_tokens: 32000
+  aggregator:
+    backend: claude_code
+    model: claude-opus-4-8
+    max_tokens: 32000
+
+gates:
+  floor_submit_min: 8
+  freeze_min: 24
+  final_submit_buffer_min: 3
+  report_deadline_min: 30
+
+parallel:
+  max_candidates: 3
+  max_candidates_hard: 4
+  max_concurrent_kernels: 2
+  coder_timeout_s: 900
+  tuner_timeout_s: 600
+
+submit:
+  max_submissions: 50
+  reserve_for_final: 4
+  floor_lane: 1
+  probe_lane: 12
+  milestone_min_gain_sigma: 1.0
+  default_gpu_seconds: 1800
+  poll_interval_s: 20
+  poll_max_min: 10

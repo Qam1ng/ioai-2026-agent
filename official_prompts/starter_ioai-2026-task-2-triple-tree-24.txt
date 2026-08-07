@@ -1,0 +1,23 @@
+Solve the Kaggle competition ioai-2026-task-2-triple-tree-24.
+
+Follow your system instructions to guide you on how to solve this.
+
+Read the competition Overview tabs before you begin. In particular:
+- "Description" for the task and constraints
+- "Data" for the sample fields, grid and action encoding
+- "Evaluation" for the submission.csv format and metric
+- "Kaggle CLI Submission" for the exact submission flow and hard rules
+- "Report Generation Prompt" for the technical report you must write
+
+Do not violate the competition rules, especially those in "Kaggle CLI Submission".
+
+Key constraints:
+- Every submission must come from a Kaggle notebook. Predictions cannot be uploaded as a file.
+- Your notebook has no internet access. No pretrained models; train from scratch. Do not attach extra datasets or models beyond the provided wheel dataset.
+- Start from the official starter script and keep its environment setup block at the very top, unchanged. It installs the pinned packages offline from the mounted wheel dataset (`kamalkhan/ioai-2026-wheel-dataset`) and must run before you import torch or numpy. It costs about 35-40 seconds per run.
+- Cap every kernel run at 300 seconds. Always push with:
+      kaggle kernels push -p <folder>/ --timeout 300
+- You have a budget of 20 notebook versions. Every `kaggle kernels push` spends one, even if the run fails or is stopped at the timeout. Each version may be submitted at most once. Validate your script before each push.
+- Use at most one GPU (set your device to `cuda:0`).
+- Write `/kaggle/working/submission.csv` with columns `id,prediction`, one row per `id` in the test split (7,200 rows), prediction an integer 0-5. The column is named `prediction`, not `action`.
+- Send `kaggle competitions submit` before the competition deadline.

@@ -1,0 +1,32 @@
+Solve the Kaggle competition ioai-2026-task-5-triple-tree-36. The data is at /data/qyan/ioai/ioai-2026-task-5-triple-tree-36
+
+Follow your system instructions to guide you on how to solve this.
+
+Read the competition Overview tabs before you begin. In particular:
+- "Description" for the task and the allowed pretrained model
+- "Data" for the splits, on-disk format and how to locate files
+- "Evaluation" for the submission format and the metric
+- "Kaggle CLI Submission" for the exact submission flow and hard rules
+- "Report Generation Prompt" for the technical report you must write
+
+Do not violate the competition rules, especially those in "Kaggle CLI Submission".
+
+Key constraints:
+- Every submission must come from a Kaggle notebook. Predictions cannot be
+  uploaded as a file.
+- Your notebook has no internet access. Install packages offline from the
+  mounted wheel dataset using the setup block at the top of solution.py, and
+  keep that block unchanged and above every other import.
+- The only permitted pretrained model is bge-base-en-v1.5, which ships with the
+  competition data. Load it from its local directory, never by hub id.
+- Cap every kernel run at 600 seconds. Always push with:
+      kaggle kernels push -p <folder>/ --timeout 600
+  That budget covers the offline install, any training, and inference.
+- You have a budget of 15 notebook versions. Every `kaggle kernels push` spends
+  one, even if the run fails or is stopped at the timeout. Each version may be
+  submitted at most once. Do not push speculatively.
+- Use at most one GPU (set your device to cuda:0).
+- Self-score on dataset/dev/ before submitting. It is labelled and costs nothing.
+- Write /kaggle/working/submission.csv with the header id,boundary_char_index,
+  one row for each of the 760 test ids, each value an integer inside the passage.
+- Send `kaggle competitions submit` before the competition deadline.

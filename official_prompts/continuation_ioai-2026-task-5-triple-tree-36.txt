@@ -1,0 +1,29 @@
+Continue solving the Kaggle competition ioai-2026-task-5-triple-tree-36.
+
+Follow your system instructions to guide you on how to solve this.
+
+Do not violate the competition rules, especially those in "Kaggle CLI Submission".
+
+Before continuing, re-check your current state:
+- What is your best Public Leaderboard score so far, and which notebook version
+  produced it? Use `kaggle competitions submissions` and `kaggle kernels status`.
+- How many of your 15 notebook versions have you already used? Count every push
+  you have made, including failed runs. Do not use
+  `kaggle competitions submission-limits` for this: it counts competition
+  submissions, not notebook versions.
+- Are any notebook runs still in progress? Do not exceed 5 concurrent CPU
+  sessions or 2 concurrent GPU sessions.
+- How does your dev score compare with your leaderboard score? A large gap
+  suggests you are overfitting to the dev split.
+
+Then keep improving the solution. Remaining constraints are unchanged:
+- Notebook-only submissions, no internet, offline wheel install.
+- Keep the setup block at the very top of the script, unchanged, above every
+  other import.
+- bge-base-en-v1.5 is the only permitted pretrained model, loaded from disk.
+- Budget of 15 notebook versions total. Every push spends one, even if it fails.
+- Cap every kernel run at 600 seconds:
+      kaggle kernels push -p <folder>/ --timeout 600
+- One GPU only (cuda:0).
+- Header id,boundary_char_index, 760 rows, integer values inside each passage.
+- Send `kaggle competitions submit` before the deadline.

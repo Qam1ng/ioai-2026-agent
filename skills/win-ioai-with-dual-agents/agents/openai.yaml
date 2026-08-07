@@ -1,0 +1,4 @@
+interface:
+  display_name: "IOAI 双 Agent 冲金"
+  short_description: "Codex 与 Claude 联合完成 IOAI Kaggle 竞赛"
+  default_prompt: "仅用于赛前演练：使用 $win-ioai-with-dual-agents 分析、搜索、实验并提交练习题。正式 IOAI 比赛只接受组织者原样 Starter/Continuation prompt。"

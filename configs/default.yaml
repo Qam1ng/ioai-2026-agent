@@ -1,0 +1,79 @@
+# Swarm defaults. Environment variables win over this file (see swarm/config.py),
+# which is how the runtime model gets switched on competition day without a code edit.
+#
+#   SWARM_BACKEND / SWARM_MODEL / SWARM_BASE_URL / SWARM_API_KEY_ENV
+#   SWARM_DRY_RUN / SWARM_MAX_CANDIDATES / SWARM_GPU_QUOTA_HOURS
+
+deadline_min: 360        # one 6-hour competition window
+max_cost_usd: 1000
+gpu_quota_hours: 30      # per Kaggle account per week, shared by all 3 problems of a day
+kaggle_user: jingyuanzhang1018
+dry_run: false
+
+# Development runtime: Gemini 3.1 Pro through an OpenAI-compatible gateway.
+# Competition runtime: switch to Fable 5 / Opus 5 by exporting SWARM_* vars.
+default_model:
+  backend: openai
+  model: gemini-3.1-pro
+  base_url: ""            # set via SWARM_BASE_URL or OPENAI_BASE_URL
+  api_key_env: OPENAI_API_KEY
+  max_tokens: 32000
+
+models:
+  # Judgement roles run on the plain API path: controlled context, auditable.
+  manager:
+    backend: openai
+    model: gemini-3.1-pro
+    api_key_env: OPENAI_API_KEY
+    max_tokens: 16000
+  # Verifier builds the eval/ harness -- metric replication, grouped k-fold,
+  # format validation. That is code work, so it gets the full coding agent.
+  # The NUMBERS never come from the model: the pod re-runs eval/run_eval.py
+  # as a deterministic subprocess for every verification after the first.
+  verifier:
+    backend: claude_code
+    model: ""
+    max_tokens: 32000
+  compliance:
+    backend: openai
+    model: gemini-3.1-pro
+    api_key_env: OPENAI_API_KEY
+    max_tokens: 8000
+
+  # Coding roles run as headless Claude Code processes (swarm/runners).
+  # `model` here is passed to `claude --model`; leave blank for the CLI default.
+  coder:
+    backend: claude_code
+    model: ""
+    max_tokens: 32000
+  tuner:
+    backend: claude_code
+    model: ""
+    max_tokens: 32000
+  aggregator:
+    backend: claude_code
+    model: ""
+    max_tokens: 32000
+
+gates:
+  floor_submit_min: 45      # a valid submission must exist by T+45min, no exceptions
+  freeze_min: 315           # T+5h15m: consolidate only, no new directions
+  final_submit_buffer_min: 20
+  report_deadline_min: 30   # organizers require the report within 30min of the close
+
+parallel:
+  max_candidates: 5         # GPU is plentiful on our side; this is the exploration width
+  max_candidates_hard: 8
+  max_concurrent_kernels: 3
+  coder_timeout_s: 1800
+  tuner_timeout_s: 2400
+
+submit:
+  max_submissions: 50
+  reserve_for_final: 4
+  floor_lane: 1
+  probe_lane: 12            # cheap CPU kernels; they cost zero GPU quota
+  milestone_min_gain_sigma: 1.0
+  default_gpu_seconds: 1800
+  poll_interval_s: 30
+  poll_max_min: 45

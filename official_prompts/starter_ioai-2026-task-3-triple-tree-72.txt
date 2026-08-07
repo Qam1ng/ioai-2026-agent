@@ -1,0 +1,41 @@
+Solve the Kaggle competition ioai-2026-task-3-triple-tree-72. The data is at /data/qyan/ioai/ioai-2026-task-3-triple-tree-72
+
+Follow your system instructions to guide you on how to solve this.
+
+Read the competition Overview tabs before you begin. In particular:
+- "Description" for the task and why the public embeddings differ from the judge's
+- "Data" for the files and how to load them
+- "Evaluation" for the judge protocol, submission.csv format and metric
+- "Kaggle CLI Submission" for the exact submission flow and hard rules
+- "Report Generation Prompt" for the technical report you must write
+
+Do not violate the competition rules, especially those in "Kaggle CLI Submission".
+
+Key constraints:
+- This is an interactive task, but NOT a stdin/stdout one. The grader IMPORTS
+  your submitted file as a Python module and calls your objects directly:
+      words, embeddings = load_public_data()     # once per round
+      player = PotatoPlayer(words, embeddings)   # once per round
+      player.new_game()                          # before each of 120 games
+      new_word = player.respond(message)         # each turn; RETURNS a str
+  Your `if __name__ == "__main__":` block never runs inside the grader. Keep the
+  names load_public_data and PotatoPlayer exactly as spelled, and keep
+  __init__(self, words, embeddings) at exactly two arguments.
+- Start from ioai-starter.py in the competition data. It already implements the
+  contract and the base64 submission envelope. Edit the PotatoPlayer class body.
+- respond() must RETURN a word from vocabulary.json, not print it. Returning
+  anything else fails the round.
+- Run `python script.py` locally before every submission. It verifies the grader
+  contract and self-scores on test_public.json. A kernel push reports COMPLETE
+  even when your interface is wrong, because the kernel only writes the CSV.
+- The grader allows 600 seconds for all 120 games in a round, including startup
+  and precomputation.
+- You have a budget of 15 scored submissions. Every `kaggle competitions submit`
+  spends one, even if the score does not improve. Pushing a kernel version is
+  free. Validate on test_public.json before each submission.
+- submission.csv must have columns id,program_b64 and exactly two rows,
+  leaderboard-a and leaderboard-b, carrying the SAME base64 payload.
+- Self-score on test_public.json before submitting, but remember the judge uses a
+  different, private embedding space, so local scores run much higher than
+  leaderboard scores.
+- Send `kaggle competitions submit` before the competition deadline.

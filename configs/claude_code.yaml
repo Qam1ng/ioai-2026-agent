@@ -1,0 +1,76 @@
+# Every role runs as a headless Claude Code process.
+#
+# Use this profile when no API credentials are configured: the `claude` CLI is
+# already authenticated, so the whole swarm runs with zero extra setup. It is
+# also the closest profile to "each sub-agent is a Claude Code instance".
+#
+# Trade-off vs configs/default.yaml: judgement roles get a filesystem and a
+# shell they do not need, and their context is managed by the CLI rather than
+# by us, which makes their reasoning slightly less auditable. Prefer the API
+# path for those roles once a key is available.
+
+deadline_min: 360
+max_cost_usd: 1000
+gpu_quota_hours: 30
+kaggle_user: jingyuanzhang1018
+dry_run: false
+
+default_model:
+  backend: claude_code
+  model: ""              # blank = whatever `claude` is configured to use
+  max_tokens: 32000
+
+models:
+  manager:
+    backend: claude_code
+    max_tokens: 16000
+  profiler:
+    backend: claude_code
+    max_tokens: 32000
+  designer:
+    backend: claude_code
+    max_tokens: 32000
+  coder:
+    backend: claude_code
+    max_tokens: 32000
+  tuner:
+    backend: claude_code
+    max_tokens: 32000
+  verifier:
+    backend: claude_code
+    max_tokens: 32000
+  prober:
+    backend: claude_code
+    max_tokens: 16000
+  compliance:
+    backend: claude_code
+    max_tokens: 8000
+  aggregator:
+    backend: claude_code
+    max_tokens: 32000
+  reporter:
+    backend: claude_code
+    max_tokens: 32000
+
+gates:
+  floor_submit_min: 45
+  freeze_min: 315
+  final_submit_buffer_min: 20
+  report_deadline_min: 30
+
+parallel:
+  max_candidates: 5
+  max_candidates_hard: 8
+  max_concurrent_kernels: 3
+  coder_timeout_s: 1800
+  tuner_timeout_s: 2400
+
+submit:
+  max_submissions: 50
+  reserve_for_final: 4
+  floor_lane: 1
+  probe_lane: 12
+  milestone_min_gain_sigma: 1.0
+  default_gpu_seconds: 1800
+  poll_interval_s: 30
+  poll_max_min: 45

@@ -1,0 +1,32 @@
+Continue solving the Kaggle competition ioai-2026-task-3-triple-tree-72.
+
+Follow your system instructions to guide you on how to solve this.
+
+Do not violate the competition rules, especially those in "Kaggle CLI Submission".
+
+Before continuing, re-check your current state:
+- What is your best Public Leaderboard score so far, and which notebook version
+  produced it? Use `kaggle competitions submissions` and `kaggle kernels status`.
+- How many of your 15 scored submissions have you already used? Use
+  `kaggle competitions submission-limits`: it counts competition submissions,
+  which is exactly what is limited here. Pushing kernel versions is free.
+- Are any notebook runs still in progress? Do not exceed 5 concurrent CPU
+  sessions or 2 concurrent GPU sessions.
+- How does your self-scored result on test_public.json compare with your actual
+  leaderboard score? A large gap means you are overfitting to the public
+  embeddings rather than to the judge's private space.
+
+Then keep improving the solution. Remaining constraints are unchanged:
+- Notebook-only submissions, no internet.
+- The grader IMPORTS your file and calls load_public_data() and
+  PotatoPlayer(words, embeddings).new_game() / .respond(message). There is no
+  stdin/stdout protocol, and your __main__ block never runs in the grader.
+- respond() must RETURN a word from vocabulary.json, not print it.
+- Run `python script.py` locally before each submission: it checks the grader
+  contract and self-scores. A kernel push says COMPLETE even with a broken
+  interface, because the kernel only writes the CSV.
+- 600 seconds for all 120 games in a round.
+- Budget of 15 scored submissions total.
+- submission.csv: columns id,program_b64, rows leaderboard-a and leaderboard-b
+  with the SAME payload.
+- Send `kaggle competitions submit` before the deadline.

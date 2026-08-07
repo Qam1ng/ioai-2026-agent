@@ -1,0 +1,3 @@
+Continue solving the Kaggle competition ioai-2026-ai-models-track-practice-task-1-timed-deps-12. 
+Follow your system instructions to guide you on how to solve this.
+Do not violate the competition rules, especially those in "Kaggle CLI Submission"

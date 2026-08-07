@@ -1,0 +1,50 @@
+# Cheap end-to-end validation profile: every role on Claude Haiku 4.5 via the
+# API path. Used to exercise the whole machine for a few dollars before
+# spending a real window on a frontier model. Gates are scaled down so a short
+# run still exercises the floor / freeze / final-buffer logic.
+
+deadline_min: 30
+max_cost_usd: 25
+gpu_quota_hours: 30
+kaggle_user: jingyuanzhang1018
+dry_run: true
+
+default_model:
+  backend: claude
+  model: claude-haiku-4-5-20251001
+  max_tokens: 8000
+
+models:
+  # Exercise the Claude Code path for the two roles whose work is code:
+  # the harness builder and the kernel writer.
+  verifier:
+    backend: claude_code
+    model: claude-haiku-4-5-20251001
+    max_tokens: 8000
+  coder:
+    backend: claude_code
+    model: claude-haiku-4-5-20251001
+    max_tokens: 8000
+
+gates:
+  floor_submit_min: 8
+  freeze_min: 24
+  final_submit_buffer_min: 3
+  report_deadline_min: 30
+
+parallel:
+  max_candidates: 3
+  max_candidates_hard: 4
+  max_concurrent_kernels: 2
+  coder_timeout_s: 600
+  tuner_timeout_s: 600
+
+submit:
+  max_submissions: 50
+  reserve_for_final: 4
+  floor_lane: 1
+  probe_lane: 12
+  milestone_min_gain_sigma: 1.0
+  default_gpu_seconds: 1800
+  poll_interval_s: 20
+  poll_max_min: 10

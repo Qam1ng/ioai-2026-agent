@@ -1,0 +1,20 @@
+Continue solving the Kaggle competition ioai-2026-task-2-triple-tree-24.
+
+Follow your system instructions to guide you on how to solve this.
+
+Do not violate the competition rules, especially those in "Kaggle CLI Submission".
+
+Before continuing, re-check your current state:
+- What is your best Public Leaderboard score so far, and which notebook version produced it? Use `kaggle competitions submissions` and `kaggle kernels status`.
+- How many of your 20 notebook versions have you already used? Count every push you have made, including failed runs. Do not use `kaggle competitions submission-limits` for this: it counts competition submissions, not notebook versions.
+- Are any notebook runs still in progress? Do not exceed 5 concurrent CPU sessions or 2 concurrent GPU sessions.
+
+Then keep improving the solution. Remaining constraints are unchanged:
+- Notebook-only submissions, no internet, no pretrained models, no extra datasets/models beyond the provided wheel dataset.
+- Keep the starter's environment setup block at the very top of the script, unchanged, above any torch/numpy import.
+- Budget of 20 notebook versions total. Every `kaggle kernels push` spends one, even if the run fails. Each version may be submitted at most once.
+- Cap every kernel run at 300 seconds:
+      kaggle kernels push -p <folder>/ --timeout 300
+- One GPU only (`cuda:0`).
+- Header `id,prediction` (not `action`), one row per test `id`, prediction an integer 0-5.
+- Send `kaggle competitions submit` before the deadline.

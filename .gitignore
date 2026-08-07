@@ -1,0 +1,31 @@
+# --- Secrets: NEVER commit ---
+.env
+*.key
+**/access_token
+kaggle.json
+.kaggle/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# --- Data / runs (large; not source) ---
+data/
+tasks/*/input/
+tasks/*/work/
+runs/
+*.log
+submission*.csv
+submission*.jsonl
+
+# --- OS ---
+.DS_Store
+tasks/*/cache/
+tasks/*/runs/
+tasks/*/overnight_result.txt
+tasks/*/overnight_progress.txt
+tasks/*/overnight_subs.txt
+workspace/

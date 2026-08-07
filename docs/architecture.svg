@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1240 940" font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2d3436"/>
+    </marker>
+    <marker id="arrB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0984e3"/>
+    </marker>
+  </defs>
+
+  <rect x="0" y="0" width="1240" height="940" fill="#ffffff"/>
+  <text x="620" y="34" text-anchor="middle" font-size="22" font-weight="700" fill="#2d3436">Autonomous ML Competition Agent — Architecture (launch → final submission)</text>
+
+  <!-- ═══════════ Row 1: human launch ═══════════ -->
+  <rect x="60" y="58" width="330" height="54" rx="10" fill="#ffeaa7" stroke="#e17055" stroke-width="2"/>
+  <text x="225" y="80" text-anchor="middle" font-size="15" font-weight="700" fill="#2d3436">HUMAN — the only action: launch</text>
+  <text x="225" y="100" text-anchor="middle" font-size="12.5" fill="#2d3436" font-family="monospace">python -m agent.main --slug … --brief task.md</text>
+  <path d="M390,85 H480" stroke="#2d3436" stroke-width="2" marker-end="url(#arr)"/>
+  <text x="435" y="76" text-anchor="middle" font-size="11" fill="#636e72">no human after this</text>
+
+  <!-- ═══════════ HARNESS outer box ═══════════ -->
+  <rect x="40" y="130" width="880" height="640" rx="14" fill="none" stroke="#2d3436" stroke-width="2.5"/>
+  <text x="58" y="156" font-size="15" font-weight="700" fill="#2d3436">HARNESS  (plain Python — enforces what must never go wrong)</text>
+
+  <!-- LLM backends -->
+  <rect x="62" y="180" width="200" height="130" rx="10" fill="#dfe6fd" stroke="#6c5ce7" stroke-width="2"/>
+  <text x="162" y="203" text-anchor="middle" font-size="14" font-weight="700" fill="#2d3436">LLM BACKEND</text>
+  <text x="162" y="221" text-anchor="middle" font-size="11.5" fill="#636e72">pluggable (providers/)</text>
+  <rect x="78" y="232" width="168" height="22" rx="5" fill="#ffffff" stroke="#6c5ce7"/>
+  <text x="162" y="247" text-anchor="middle" font-size="11.5" fill="#2d3436">Claude Opus 4.8 (today)</text>
+  <rect x="78" y="258" width="168" height="22" rx="5" fill="#ffffff" stroke="#b2bec3"/>
+  <text x="162" y="273" text-anchor="middle" font-size="11.5" fill="#636e72">OpenAI / local vLLM / …</text>
+  <text x="162" y="298" text-anchor="middle" font-size="10.5" fill="#636e72">step(messages, tools) — model-agnostic</text>
+
+  <!-- Agent loop -->
+  <rect x="300" y="180" width="290" height="130" rx="10" fill="#efe7ff" stroke="#6c5ce7" stroke-width="2.5"/>
+  <text x="445" y="205" text-anchor="middle" font-size="15" font-weight="700" fill="#2d3436">AGENT LOOP  (ReAct / tool-use)</text>
+  <text x="445" y="228" text-anchor="middle" font-size="12" fill="#2d3436">observe state → decide → call tools →</text>
+  <text x="445" y="245" text-anchor="middle" font-size="12" fill="#2d3436">read results / tracebacks → decide again</text>
+  <text x="445" y="270" text-anchor="middle" font-size="11.5" fill="#636e72">phase goal injected each turn +</text>
+  <text x="445" y="285" text-anchor="middle" font-size="11.5" fill="#636e72">[budget] line the model must respect</text>
+  <path d="M262,245 H300" stroke="#2d3436" stroke-width="2" marker-end="url(#arr)" marker-start="url(#arr)"/>
+
+  <!-- Memory / skills -->
+  <rect x="628" y="180" width="270" height="130" rx="10" fill="#ffe3d8" stroke="#e17055" stroke-width="2"/>
+  <text x="763" y="203" text-anchor="middle" font-size="14" font-weight="700" fill="#2d3436">KNOWLEDGE (persistent)</text>
+  <text x="763" y="226" text-anchor="middle" font-size="12" fill="#2d3436">memory/lessons/ — cross-task lessons,</text>
+  <text x="763" y="242" text-anchor="middle" font-size="12" fill="#2d3436">written back by the agent (memory_write)</text>
+  <text x="763" y="264" text-anchor="middle" font-size="12" fill="#2d3436">skills/ — playbooks per task family</text>
+  <text x="763" y="280" text-anchor="middle" font-size="12" fill="#2d3436">(kaggle-submission, audio, tabular…)</text>
+  <text x="763" y="300" text-anchor="middle" font-size="10.5" fill="#636e72">recall early · save new lessons every run</text>
+  <path d="M590,245 H628" stroke="#2d3436" stroke-width="2" marker-end="url(#arr)" marker-start="url(#arr)"/>
+
+  <!-- Tools bar -->
+  <rect x="62" y="340" width="836" height="96" rx="10" fill="#d9f7ef" stroke="#00b894" stroke-width="2"/>
+  <text x="480" y="362" text-anchor="middle" font-size="14" font-weight="700" fill="#2d3436">TOOLS  (agent/tools/ — all file access confined to workspace/)</text>
+  <text x="90" y="386" font-size="12" fill="#2d3436">run_python / run_bash (sandbox + timeout, local GPU)   ·   read/write/list files   ·   memory_recall / memory_write   ·   skill_list / skill_load</text>
+  <text x="90" y="408" font-size="12" fill="#2d3436">kaggle_download · kaggle_push_kernel · kernel_status / kernel_log · kaggle_submit (budget-gated) · kaggle_submissions</text>
+  <text x="90" y="428" font-size="11" fill="#636e72">+ phase_complete (agent declares a phase done → harness runs the gate check)</text>
+  <path d="M445,310 V340" stroke="#2d3436" stroke-width="2" marker-end="url(#arr)" marker-start="url(#arr)"/>
+
+  <!-- Phase pipeline -->
+  <text x="62" y="478" font-size="14" font-weight="700" fill="#2d3436">PHASE STATE MACHINE  (hard gate ✓ between phases; crash-resume via state.json)</text>
+  <!-- phase boxes: 8 phases, x from 62, w=94, gap=12 -->
+  <g font-size="12" font-weight="600" fill="#2d3436" text-anchor="middle">
+    <rect x="62"  y="492" width="94" height="58" rx="8" fill="#fff3d6" stroke="#fdcb6e" stroke-width="2"/>
+    <text x="109" y="516">INGEST</text><text x="109" y="533" font-size="10" font-weight="400" fill="#636e72">read task →</text><text x="109" y="545" font-size="10" font-weight="400" fill="#636e72">TASK_CARD</text>
+    <rect x="168" y="492" width="94" height="58" rx="8" fill="#fff3d6" stroke="#fdcb6e" stroke-width="2"/>
+    <text x="215" y="516">ANALYZE</text><text x="215" y="533" font-size="10" font-weight="400" fill="#636e72">EDA, recall</text><text x="215" y="545" font-size="10" font-weight="400" fill="#636e72">lessons</text>
+    <rect x="274" y="492" width="94" height="58" rx="8" fill="#fff3d6" stroke="#fdcb6e" stroke-width="2"/>
+    <text x="321" y="516">PLAN</text><text x="321" y="533" font-size="10" font-weight="400" fill="#636e72">approaches +</text><text x="321" y="545" font-size="10" font-weight="400" fill="#636e72">CV design</text>
+    <rect x="380" y="492" width="94" height="58" rx="8" fill="#fff3d6" stroke="#fdcb6e" stroke-width="2"/>
+    <text x="427" y="516">SCAFFOLD</text><text x="427" y="533" font-size="10" font-weight="400" fill="#636e72">pipeline+metric</text><text x="427" y="545" font-size="10" font-weight="400" fill="#636e72">self-test ✓</text>
+    <rect x="486" y="492" width="94" height="58" rx="8" fill="#fff3d6" stroke="#fdcb6e" stroke-width="2"/>
+    <text x="533" y="516">BASELINE</text><text x="533" y="533" font-size="10" font-weight="400" fill="#636e72">floor submit</text><text x="533" y="545" font-size="10" font-weight="400" fill="#636e72">(early, real)</text>
+    <rect x="592" y="492" width="120" height="58" rx="8" fill="#ffe8c9" stroke="#e17055" stroke-width="2.5"/>
+    <text x="652" y="512">EXPERIMENT</text><text x="652" y="528" font-size="10" font-weight="400" fill="#636e72">hypothesis → code →</text><text x="652" y="540" font-size="10" font-weight="400" fill="#636e72">k-fold ±σ → sig. gate</text>
+    <rect x="724" y="492" width="88" height="58" rx="8" fill="#fff3d6" stroke="#fdcb6e" stroke-width="2"/>
+    <text x="768" y="516">FINALIZE</text><text x="768" y="533" font-size="10" font-weight="400" fill="#636e72">retrain best,</text><text x="768" y="545" font-size="10" font-weight="400" fill="#636e72">final holdout</text>
+    <rect x="824" y="492" width="74" height="58" rx="8" fill="#fff3d6" stroke="#fdcb6e" stroke-width="2"/>
+    <text x="861" y="516">REPORT</text><text x="861" y="533" font-size="10" font-weight="400" fill="#636e72">tech report</text><text x="861" y="545" font-size="10" font-weight="400" fill="#636e72">+ lessons</text>
+  </g>
+  <!-- gate arrows -->
+  <g stroke="#2d3436" stroke-width="1.8">
+    <path d="M156,521 H168" marker-end="url(#arr)"/><path d="M262,521 H274" marker-end="url(#arr)"/>
+    <path d="M368,521 H380" marker-end="url(#arr)"/><path d="M474,521 H486" marker-end="url(#arr)"/>
+    <path d="M580,521 H592" marker-end="url(#arr)"/><path d="M712,521 H724" marker-end="url(#arr)"/>
+    <path d="M812,521 H824" marker-end="url(#arr)"/>
+  </g>
+  <!-- experiment loop-back -->
+  <path d="M652,492 C652,468 600,468 600,492" fill="none" stroke="#e17055" stroke-width="1.8" marker-end="url(#arr)"/>
+  <text x="652" y="470" text-anchor="middle" font-size="10" fill="#e17055">iterate under budget</text>
+
+  <!-- verification stack -->
+  <rect x="62" y="572" width="836" height="84" rx="10" fill="#eaf3ff" stroke="#0984e3" stroke-width="2"/>
+  <text x="480" y="594" text-anchor="middle" font-size="14" font-weight="700" fill="#2d3436">VERIFICATION STACK  (why iterations stay honest — no LLM judge, no human)</text>
+  <text x="90" y="616" font-size="11.8" fill="#2d3436">T1 structural: runs / format / metric self-test        T2 statistical: stratified k-fold mean ± σ + significance gate (kills noise-chasing)</text>
+  <text x="90" y="636" font-size="11.8" fill="#2d3436">T3 generalization: periodic real submissions calibrate local-CV ↔ leaderboard        T4 final: untouched holdout before the last submit</text>
+
+  <!-- cross-cutting -->
+  <rect x="62" y="676" width="836" height="74" rx="10" fill="#f1f2f6" stroke="#636e72" stroke-width="2"/>
+  <text x="480" y="698" text-anchor="middle" font-size="14" font-weight="700" fill="#2d3436">CROSS-CUTTING (agent cannot bypass)</text>
+  <text x="90" y="720" font-size="11.8" fill="#2d3436">budgets: wall-clock · submissions · LLM $   |   invariant: a valid submission exists at all times   |   trace.jsonl: every LLM+tool call</text>
+  <text x="90" y="740" font-size="11.8" fill="#2d3436">state.json checkpoints (crash-resume)   |   submit_gate on every real submission   |   tool declaration auto-derived from trace</text>
+
+  <!-- ═══════════ Kaggle cloud ═══════════ -->
+  <rect x="960" y="130" width="240" height="640" rx="14" fill="#eaf6ff" stroke="#0984e3" stroke-width="2.5"/>
+  <text x="1080" y="158" text-anchor="middle" font-size="15" font-weight="700" fill="#0984e3">KAGGLE (cloud)</text>
+  <rect x="980" y="180" width="200" height="64" rx="8" fill="#ffffff" stroke="#0984e3"/>
+  <text x="1080" y="205" text-anchor="middle" font-size="12.5" font-weight="600" fill="#2d3436">competition data</text>
+  <text x="1080" y="224" text-anchor="middle" font-size="11" fill="#636e72">download once → input/</text>
+  <rect x="980" y="270" width="200" height="86" rx="8" fill="#ffffff" stroke="#0984e3"/>
+  <text x="1080" y="293" text-anchor="middle" font-size="12.5" font-weight="600" fill="#2d3436">scoring kernel run</text>
+  <text x="1080" y="312" text-anchor="middle" font-size="11" fill="#636e72">code comp: notebook only,</text>
+  <text x="1080" y="327" text-anchor="middle" font-size="11" fill="#636e72">OFFLINE, GPU not guaranteed,</text>
+  <text x="1080" y="342" text-anchor="middle" font-size="11" fill="#636e72">paths discovered at runtime</text>
+  <rect x="980" y="382" width="200" height="64" rx="8" fill="#ffffff" stroke="#0984e3"/>
+  <text x="1080" y="406" text-anchor="middle" font-size="12.5" font-weight="600" fill="#2d3436">submission + leaderboard</text>
+  <text x="1080" y="425" text-anchor="middle" font-size="11" fill="#636e72">true score → recalibrate CV</text>
+  <path d="M898,388 H980" stroke="#0984e3" stroke-width="2" marker-end="url(#arrB)" marker-start="url(#arrB)"/>
+  <text x="939" y="380" text-anchor="middle" font-size="10.5" fill="#0984e3">kaggle tools</text>
+  <text x="1080" y="480" text-anchor="middle" font-size="11.5" fill="#636e72">competition day: 6h / 3 problems,</text>
+  <text x="1080" y="496" text-anchor="middle" font-size="11.5" fill="#636e72">50 submissions per problem,</text>
+  <text x="1080" y="512" text-anchor="middle" font-size="11.5" fill="#636e72">solution trains ≤ ~10 min GPU</text>
+  <text x="1080" y="545" text-anchor="middle" font-size="11.5" fill="#636e72">agent compute runs locally</text>
+  <text x="1080" y="561" text-anchor="middle" font-size="11.5" fill="#636e72">(RTX 4080) — Kaggle is used for</text>
+  <text x="1080" y="577" text-anchor="middle" font-size="11.5" fill="#636e72">data-in and score-out only</text>
+
+  <!-- ═══════════ Outputs ═══════════ -->
+  <path d="M480,770 V800" stroke="#2d3436" stroke-width="2" marker-end="url(#arr)"/>
+  <rect x="150" y="806" width="660" height="60" rx="10" fill="#d6f5d6" stroke="#00b894" stroke-width="2.5"/>
+  <text x="480" y="830" text-anchor="middle" font-size="14.5" font-weight="700" fill="#2d3436">OUTPUTS</text>
+  <text x="480" y="850" text-anchor="middle" font-size="12.5" fill="#2d3436">submitted solution (scored on leaderboard)  ·  REPORT.md (required technical report)  ·  trace.jsonl (full audit: tools, tokens, cost)</text>
+
+  <text x="620" y="912" text-anchor="middle" font-size="11" fill="#b2bec3">IOAI² AI Models Track — humans may only initiate the run · all tools declared · efficiency metrics reported</text>
+</svg>

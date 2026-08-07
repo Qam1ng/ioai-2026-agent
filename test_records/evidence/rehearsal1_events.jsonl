@@ -1,0 +1,62 @@
+{"event": "official_assets_ready", "path": "/home/qyan/jy-agent/workspace/final_system/ioai-2026-ai-models-track-practice-task-1-timed-deps-12-rehearsal1/search/search-20260804T204145Z-30da67ee/work/analyst/SEARCH_BUNDLE/ORIGINAL_ASSETS", "timestamp": 1785876116.1091647}
+{"calibration": {"active": false, "base_contract": "immutable_E0_metric_and_folds", "baseline_spearman": 0.0, "blend_weight": 0.0, "calibrated_loo_spearman": 0.0, "event": "calibration_update", "feedback_count": 0, "reason": "insufficient_or_non_improving_feedback", "residual_rmse": null, "schema_version": 1, "timestamp": 1785876116.118742, "version": "621933870f0e755aa2105343fc76feed91952b583f1e0d8247040072d3a34230"}, "event": "calibration_updated", "timestamp": 1785876116.120548}
+{"event": "search_finished", "session": "/home/qyan/jy-agent/workspace/final_system/ioai-2026-ai-models-track-practice-task-1-timed-deps-12-rehearsal1/search/search-20260804T204145Z-30da67ee", "timestamp": 1785876119.211514}
+{"bundle": "", "bundle_sha256": "", "event": "search_handoff", "status": "raw_assets_fallback", "timestamp": 1785876119.2133567}
+{"bundle": "", "event": "hearsay_started", "pid": 1989825, "timestamp": 1785876119.2159963}
+{"contract_sha256": "d4b09ee1ff40db8c2d366540d79f05856325929c3cdee11bb44796d73993b4ed", "created_at": 1785876266.2444322, "direction": "maximize", "event": "evaluation_contract_frozen", "fold_count": 1, "folds_sha256": "cdcc7575a89361c91928cb55688ac7e4987fa48355afeadeca3a7ac0c2d95964", "metric_sha256": "a83c8fc77c859530f05bd5bb25cd0508a7d7c725464f9e31991028f980d81c1e", "schema_version": 1, "source": "hearsay_evaluator", "timestamp": 1785876266.2449236, "unit_count": 920}
+{"candidate_count": 2, "context_sha256": "dd70ea598c7eb90b071d82ebd3b65f61fb3d79046dba36efa5f1633eaf949b4f", "event": "selection_manager_started", "submission_class": "floor", "timestamp": 1785876486.5998566}
+{"count": 2, "event": "candidates_registered", "timestamp": 1785876486.6049302}
+{"event": "selection_manager_finished", "recommendation": {}, "status": "failed", "timestamp": 1785876496.6220524}
+{"count": 1, "event": "candidates_registered", "timestamp": 1785876516.7890217}
+{"count": 1, "event": "candidates_registered", "timestamp": 1785876527.0382056}
+{"count": 1, "event": "candidates_registered", "timestamp": 1785876557.722883}
+{"candidate_count": 3, "context_sha256": "68b2b644b9c6c475d637ec80bc2139eae4efa16039f8f65771b6222c3acd41eb", "event": "selection_manager_started", "submission_class": "floor", "timestamp": 1785876578.0003254}
+{"count": 1, "event": "candidates_registered", "timestamp": 1785876578.0125055}
+{"event": "selection_manager_finished", "recommendation": {}, "status": "failed", "timestamp": 1785876588.0230525}
+{"count": 1, "event": "candidates_registered", "timestamp": 1785876608.388417}
+{"count": 1, "event": "candidates_registered", "timestamp": 1785876659.3846786}
+{"candidate_count": 3, "context_sha256": "68b2b644b9c6c475d637ec80bc2139eae4efa16039f8f65771b6222c3acd41eb", "event": "selection_manager_started", "submission_class": "floor", "timestamp": 1785876669.47499}
+{"event": "selection_manager_finished", "recommendation": {}, "status": "failed", "timestamp": 1785876679.4990478}
+{"count": 1, "event": "candidates_registered", "timestamp": 1785876699.9311683}
+{"count": 1, "event": "candidates_registered", "timestamp": 1785876730.3741112}
+{"event": "broker_submission", "submission": {"candidate_id": "hearsay-solver_b-3d1e621a28-3d1e621a28", "completed_at": 1785876730.387674, "local_score": 0.87292818, "reserved_at": 1785876730.379057, "result": {"consumed": true, "detail": "dry-run floor: hearsay-solver_b-3d1e621a28-3d1e621a28", "external_ref": "dry:sub-4ac6d05f9d", "kernel_ref": "", "kernel_version": null, "status": "dry_run"}, "selection_reason": "deterministic_manager_fallback", "source_lane": "hearsay", "submission_class": "floor", "submission_id": "sub-4ac6d05f9d"}, "timestamp": 1785876740.3870523}
+{"candidate_count": 2, "context_sha256": "be90b9df46c2523a3e9e2f440946418045803d1b5cc9ec6d52dfee5ae12a1c6d", "event": "selection_manager_started", "submission_class": "calibration", "timestamp": 1785876760.6840694}
+{"event": "selection_manager_finished", "recommendation": {}, "status": "failed", "timestamp": 1785876770.697049}
+{"count": 1, "event": "candidates_registered", "timestamp": 1785876770.797592}
+{"count": 1, "event": "candidates_registered", "timestamp": 1785876801.2306638}
+{"count": 2, "event": "candidates_registered", "timestamp": 1785876821.501657}
+{"candidate_count": 5, "context_sha256": "50f229abc33882f6dceb5333d7296d040524fe5095a76fb209cc7022c9e74655", "event": "selection_manager_started", "submission_class": "calibration", "timestamp": 1785876852.0131228}
+{"event": "selection_manager_finished", "recommendation": {}, "status": "failed", "timestamp": 1785876862.0310438}
+{"count": 1, "event": "candidates_registered", "timestamp": 1785876862.247631}
+{"count": 1, "event": "candidates_registered", "timestamp": 1785876923.4757338}
+{"candidate_count": 5, "context_sha256": "50f229abc33882f6dceb5333d7296d040524fe5095a76fb209cc7022c9e74655", "event": "selection_manager_started", "submission_class": "calibration", "timestamp": 1785876943.9675205}
+{"event": "selection_manager_finished", "recommendation": {}, "status": "failed", "timestamp": 1785876953.9760494}
+{"event": "broker_submission", "submission": {"candidate_id": "hearsay-solver_a-c37b716811-c37b716811", "completed_at": 1785876974.7502458, "local_score": 0.89502762, "reserved_at": 1785876974.7304626, "result": {"consumed": true, "detail": "dry-run calibration: hearsay-solver_a-c37b716811-c37b716811", "external_ref": "dry:sub-b09dd818fd", "kernel_ref": "", "kernel_version": null, "status": "dry_run"}, "selection_reason": "deterministic_manager_fallback", "source_lane": "hearsay", "submission_class": "calibration", "submission_id": "sub-b09dd818fd"}, "timestamp": 1785876984.7390695}
+{"candidate_count": 2, "context_sha256": "00b286ab105c98e10ca69b1d46acac5c0346b9d7ba7eecd9ebd7f77f42a2e2a5", "event": "selection_manager_started", "submission_class": "calibration", "timestamp": 1785877036.239418}
+{"count": 2, "event": "candidates_registered", "timestamp": 1785877036.2447429}
+{"event": "selection_manager_finished", "recommendation": {}, "status": "failed", "timestamp": 1785877046.2550428}
+{"count": 1, "event": "candidates_registered", "timestamp": 1785877056.5581622}
+{"count": 2, "event": "candidates_registered", "timestamp": 1785877066.8549392}
+{"event": "exploration_stopped", "timestamp": 1785877095.9240909}
+{"count": 1, "event": "candidates_registered", "timestamp": 1785877097.219328}
+{"candidate_count": 6, "context_sha256": "14abadd498b3108dc9a416e5a0548254f2ad845befe55d725e41c83a83b76b52", "event": "selection_manager_started", "submission_class": "final", "timestamp": 1785877127.3589668}
+{"event": "selection_manager_finished", "recommendation": {}, "status": "failed", "timestamp": 1785877137.3693924}
+{"candidate_count": 6, "context_sha256": "14abadd498b3108dc9a416e5a0548254f2ad845befe55d725e41c83a83b76b52", "event": "selection_manager_started", "submission_class": "final", "timestamp": 1785877217.9644592}
+{"event": "selection_manager_finished", "recommendation": {}, "status": "failed", "timestamp": 1785877227.9751043}
+{"event": "broker_submission", "submission": {"candidate_id": "hearsay-solver_b-38ec4c6daa-38ec4c6daa", "completed_at": 1785877217.974258, "local_score": 0.90607735, "reserved_at": 1785877217.9703922, "result": {"consumed": true, "detail": "dry-run final: hearsay-solver_b-38ec4c6daa-38ec4c6daa", "external_ref": "dry:sub-69d3081ab4", "kernel_ref": "", "kernel_version": null, "status": "dry_run"}, "selection_reason": "deterministic_manager_fallback", "source_lane": "hearsay", "submission_class": "final", "submission_id": "sub-69d3081ab4"}, "timestamp": 1785877227.9758523}
+{"candidate_count": 5, "context_sha256": "b6f32fc3212e405e91b924cfa8e07043b4aca039bb5a672d413cea7d286f0c45", "event": "selection_manager_started", "submission_class": "final", "timestamp": 1785877308.4258823}
+{"event": "selection_manager_finished", "recommendation": {}, "status": "failed", "timestamp": 1785877318.4361017}
+{"candidate_count": 5, "context_sha256": "b6f32fc3212e405e91b924cfa8e07043b4aca039bb5a672d413cea7d286f0c45", "event": "selection_manager_started", "submission_class": "final", "timestamp": 1785877399.0340142}
+{"event": "selection_manager_finished", "recommendation": {}, "status": "failed", "timestamp": 1785877409.0447602}
+{"event": "broker_submission", "submission": {"candidate_id": "codex-classical-rf-v2-f23aec4f7b", "completed_at": 1785877459.4531605, "local_score": 0.66298343, "reserved_at": 1785877459.4459198, "result": {"consumed": true, "detail": "dry-run final: codex-classical-rf-v2-f23aec4f7b", "external_ref": "dry:sub-5a83225f55", "kernel_ref": "", "kernel_version": null, "status": "dry_run"}, "selection_reason": "deterministic_manager_fallback", "source_lane": "codex", "submission_class": "final", "submission_id": "sub-5a83225f55"}, "timestamp": 1785877469.452836}
+{"candidate_count": 4, "context_sha256": "3d4435e343ff6d711e2ff104cec1266992f34ed15de241dbdd173f06393b47e9", "event": "selection_manager_started", "submission_class": "final", "timestamp": 1785877489.6533778}
+{"event": "selection_manager_finished", "recommendation": {}, "status": "failed", "timestamp": 1785877499.6644979}
+{"candidate_count": 4, "context_sha256": "3d4435e343ff6d711e2ff104cec1266992f34ed15de241dbdd173f06393b47e9", "event": "selection_manager_started", "submission_class": "final", "timestamp": 1785877580.185529}
+{"event": "selection_manager_finished", "recommendation": {}, "status": "failed", "timestamp": 1785877590.1965735}
+{"candidate_count": 4, "context_sha256": "3d4435e343ff6d711e2ff104cec1266992f34ed15de241dbdd173f06393b47e9", "event": "selection_manager_started", "submission_class": "final", "timestamp": 1785877670.622908}
+{"event": "selection_manager_finished", "recommendation": {}, "status": "failed", "timestamp": 1785877680.6341867}
+{"candidate_count": 4, "context_sha256": "3d4435e343ff6d711e2ff104cec1266992f34ed15de241dbdd173f06393b47e9", "event": "selection_manager_started", "submission_class": "final", "timestamp": 1785877761.056018}
+{"event": "selection_manager_finished", "recommendation": {}, "status": "failed", "timestamp": 1785877771.0674932}
+{"candidate_count": 4, "context_sha256": "3d4435e343ff6d711e2ff104cec1266992f34ed15de241dbdd173f06393b47e9", "event": "selection_manager_started", "submission_class": "final", "timestamp": 1785877851.5018928}
+{"event": "selection_manager_finished", "recommendation": {}, "status": "failed", "timestamp": 1785877861.5128546}
+{"event": "run_complete", "status": "/home/qyan/jy-agent/workspace/final_system/ioai-2026-ai-models-track-practice-task-1-timed-deps-12-rehearsal1/RUN_STATUS.json", "timestamp": 1785877913.0853837}

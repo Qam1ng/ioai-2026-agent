@@ -1,0 +1,151 @@
+# IOAI 最终系统默认配置。正式比赛时长必须由 CLI 的 --duration-minutes 显式传入；
+# 这里不硬编码“30 分钟测试”。所有真实提交还必须额外传 --live。
+
+[run]
+workspace_root = "workspace/final_system"
+poll_seconds = 10
+max_submissions = 15
+
+# 50 次额度：1 个 floor；最多 3 个路线 calibration；中间动态 milestone；
+# 最后固定保留 8 个 final/recovery。milestone 没有按路线平均切死。
+final_reserve = 3
+initial_calibrations = 2
+final_start_fraction = 0.80
+anti_monopoly_fraction = 0.50
+min_local_gain = 0.0
+# auto 从首个通过自测和证据门的 evaluator contract 冻结；不要假设每题都越大越好。
+metric_direction = "auto"
+
+# formal IOAI 默认是 kernel；auto 会先查询 Kaggle，private 查询不到时严格回退 kernel。
+# 是否真实提交只由 CLI 的显式 `--live` 决定，配置文件不能暗中打开写权限。
+submission_mode = "auto"
+
+# 单题 Broker 最多保留 2 个后台调用；账号级 2 GPU/5 CPU 由 DayResourceGate 再约束。
+max_inflight_submissions = 2
+
+# 6 小时正式赛默认在 T-120min 停止新探索，留给复算、kernel 队列和最终提交。
+# 短 rehearsal 会按 controller 的比例缩短，不会照搬 120 分钟。
+stop_exploration_minutes_before_end = 40
+submission_only_minutes_before_end = 20
+
+# 只对已确认未消费提交次数的瞬时失败重试；永久格式/执行错误不会重跑。
+max_retryable_attempts = 3
+retry_backoff_seconds = 60
+
+# IOAI 规则要求每次 push 都带 `--timeout`；没带且超时的提交直接判无效。它同时是
+# 让「本题 30 分钟」真实生效的唯一机制——Kaggle 自己的 GPU kernel 上限是几小时，
+# 不带这个 flag 的跑飞 kernel 不会在题目时限停下，会一直烧周配额并占着 GPU 位。
+# 按题目公布的时限填；30 分钟 = 1800。
+kernel_timeout_seconds = 0
+
+# floor 是保底提交，不比分数，只求先把合法结果送上榜。live run 上它在第 11 分钟
+# 拿 0.906 发车并占住 GPU 位，第 15 分钟到的 0.934 只能排队。所以给标尺一点时间
+# 沉淀——但候选够多、或窗口过了 15%、或等满这个秒数，三者任一即放行。设 0 关闭。
+floor_settle_seconds = 300
+floor_settle_candidates = 3
+
+[search]
+enabled = true
+duration_minutes = 60
+analyst_backend = "codex"
+research_backends = ["codex", "codex", "codex", "codex"]
+prompt_spec = "search_system/SEARCH_PROMPTS_ZH.md"
+
+# 分析和检索是两件事：analyst 只需要把题读准并划分方向，research 要在陌生领域里
+# 挖证据。空字符串表示沿用 [claude] 的 model/effort。
+analyst_model = "claude-fable-5"
+analyst_effort = "high"
+research_model = "claude-opus-5"
+research_effort = "high"
+
+[claude]
+binary = "/home/qyan/.local/bin/claude"
+# 独立 Claude 路线承担完整求解，不是轻量 manager；与 HearSay solver 一样使用
+# 最强模型/推理档。输出上限由 runners.py 的 CLAUDE_CODE_MAX_OUTPUT_TOKENS=32000
+# 显式固定，避免长代码/报告在 CLI 默认上限处截断。
+model = "claude-fable-5"
+effort = "high"
+
+# Azure AI Foundry 的 /anthropic 就是 Anthropic 原生 Messages API，Claude Code 可以
+# 直接跑在上面——只是它会多发 `anthropic-beta` 头和 `context_management` 字段，网关
+# 一律 400。controller 会在本地起一个 shim 把这两样剥掉再转发（实测 opus-5 /
+# fable-5 的 tool_use 都能完整往返）。留空则回退到 Max 订阅 profile。
+anthropic_base_url = "https://prosgrow-aoai-prod.services.ai.azure.com/anthropic"
+api_key_env = "AZURE_OPENAI_API_KEY"
+
+# 可填同一路径；若有两个 Max 账号，分开后一次 usage limit 不会同时击穿主线和兜底线。
+# 先分别用 `CLAUDE_CONFIG_DIR=<dir> claude /login` 登录。Agent HOME 仍另行隔离。
+integrated_profile_dir = "~/.claude-ioai-integrated"
+direct_profile_dir = "~/.claude-ioai-direct"
+turn_minutes = 30
+max_rounds = 12
+
+[codex]
+binary = "/home/qyan/.local/bin/codex"
+model = "gpt-5.6-sol"
+effort = "max"
+provider_id = "azure"
+
+# Azure AI Foundry。/openai/v1 既接受 `Authorization: Bearer`（Codex CLI 用这个）
+# 也接受 `api-key`。注意 /anthropic/v1 那条路只认 x-api-key，且不提供 gpt 模型。
+base_url = "https://prosgrow-aoai-prod.services.ai.azure.com/openai/v1"
+api_key_env = "AZURE_OPENAI_API_KEY"
+supports_web_search = true
+turn_minutes = 30
+max_rounds = 12
+
+[hearsay]
+enabled = true
+
+# 三个 solver 全部 opus-5 max：它们要在陌生题上做完整的假设→实验→回退循环。
+# evaluator 只编译一次共享标尺就停，fable-5 high 足够且不占 opus 的额度。
+model = "claude-opus-5"
+effort = "max"
+evaluator_model = "claude-fable-5"
+evaluator_effort = "high"
+solvers = 3
+# dryrun8: solver_a 单人一轮 dry run 就烧了 $114.87。0 表示不封顶（原行为）；
+# 正式赛按每题预算设置，例如 120 分钟的题给每个 solver 30-40 美元。
+solver_cost_cap_usd = 0
+rounds = 40
+max_turns = 250
+
+[selection]
+enabled = true
+model = "claude-fable-5"
+effort = "high"
+
+# Manager 只给建议；无有效建议超过 fallback_seconds 后，Broker 才使用确定性兜底。
+interval_seconds = 90
+timeout_seconds = 180
+recommendation_ttl_seconds = 300
+fallback_seconds = 240
+
+# E0 永远冻结。下列参数只控制 Public-LB 校准层；留一排序没有改善时不会启用。
+calibration_min_feedback = 3
+calibration_ridge_strength = 0.1
+calibration_min_rank_gain = 0.0
+calibration_max_blend_weight = 0.50
+
+[resources]
+# 六道题沿用同一 resource-pool-id；同一天三题另共用 floor-group-id/day-slugs。
+# 每题 50 次 submission 仍分别记账；这里只管账号每周 Kaggle 计算资源。
+root = "workspace/final_system/_resource_pools"
+gpu_quota_hours = 30
+gpu_concurrency = 2
+cpu_concurrency = 5
+# 平台时限 30 分钟;默认声明必须低于它,留出安装+写盘余量
+default_gpu_kernel_minutes = 28
+default_cpu_kernel_minutes = 10
+kernel_start_margin_minutes = 5
+acquire_poll_seconds = 2
+
+# 资源忙只短暂等待，随后返回 resource_deferred；它不占 Broker 提交槽，也不计入
+# 普通失败的三次重试上限。三题 floor 最多互等 15 分钟，避免缺席 Controller 锁死全局。
+acquire_wait_seconds = 5
+floor_grace_minutes = 15
+
+[evaluation]
+# HearSay evaluator 到此时仍未给出可验证契约，启动独立 fallback evaluator。
+fallback_after_minutes = 5
+fallback_turn_minutes = 25

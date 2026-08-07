@@ -1,0 +1,38 @@
+Solve the Kaggle competition ioai-2026-task-4-triple-tree-24. The data is at /data/qyan/ioai/ioai-2026-task-4-triple-tree-24
+
+Follow your system instructions to guide you on how to solve this.
+
+Read the competition Overview tabs before you begin. In particular:
+- "Description" for the task, the two perturbation types and allowed models
+- "Data" for the splits and directory layout
+- "Evaluation" for the prediction format, submission format and the metric
+- "Kaggle CLI Submission" for the exact submission flow and hard rules
+- "Report Generation Prompt" for the technical report you must write
+
+Do not violate the competition rules, especially those in "Kaggle CLI Submission".
+
+Key constraints:
+- Every submission must come from a Kaggle notebook. Predictions cannot be
+  uploaded as a file.
+- Your notebook has no internet access. Install packages offline from the
+  mounted wheel dataset, using the setup block shown in "Kaggle CLI Submission".
+- Cap every kernel run at 600 seconds. Always push with:
+      kaggle kernels push -p <folder>/ --timeout 600
+- You have a budget of 20 notebook versions. Every `kaggle kernels push`
+  spends one, even if the run fails or is stopped at the timeout. Do not push
+  speculatively; validate your script before each push.
+- Use at most one GPU (set your device to `cuda:0`).
+- Use only torchvision's resnet18 and timm's vit_tiny_patch16_224, loaded from
+  the checkpoints mounted under data/models/. No other pretrained models.
+- Each perturbation tensor must be 3 x H x W at the image's original
+  resolution, not 224 x 224.
+- Write `/kaggle/working/submission.csv` with the header `id,delta_a,delta_b`
+  and exactly 200 rows: a_0 through a_99, then b_0 through b_99.
+
+Before your first submission, and again whenever your approach changes
+materially, write the technical report described in "Report Generation Prompt"
+as a comment block at the very top of the `.py` file you submit. Keep it
+current so that your final submitted file contains a report describing that
+submission.
+
+Work autonomously. Do not ask me questions.

@@ -1,0 +1,259 @@
+#!/usr/bin/env bash
+# Read-only monitor for a final_system run.  usage: ./fswatch [run-id]
+cd ~/jy-agent || exit 1
+RID="${1:-live2}"
+export PATH="$HOME/venvs/ioai312/bin:$PATH"
+PY=~/venvs/ioai312/bin/python
+while true; do
+  S=$(ls -d workspace/final_system/*-${RID} 2>/dev/null | head -1)
+  clear
+  if [ -z "$S" ]; then echo "waiting for run-id=$RID …"; sleep 10; continue; fi
+  $PY - "$S" "$RID" <<'PY'
+import json, os, re, sys, time, glob, subprocess
+S, RID = sys.argv[1], sys.argv[2]
+C = os.path.join(S, "control")
+G, R, Y, B, N = "\033[32m", "\033[31m", "\033[33m", "\033[1m", "\033[0m"
+
+def jload(p, d=None):
+    try:
+        return json.load(open(p))
+    except Exception:
+        return d
+
+def readlines(p):
+    try:
+        return open(p, errors="ignore").read()
+    except Exception:
+        return ""
+
+E = [json.loads(l) for l in open(os.path.join(C, "controller_events.jsonl"))] \
+    if os.path.exists(os.path.join(C, "controller_events.jsonl")) else []
+t0 = E[0]["timestamp"] if E else time.time()
+el = (time.time() - t0) / 60
+
+# Duration comes from the run itself; hard-coding 120 silently mislabels every
+# panel on a run of any other length.
+st = jload(os.path.join(S, "RUN_STATUS.json"), {}) or {}
+DUR = float(st.get("duration_minutes") or 120)
+slug = st.get("slug") or ""
+
+print(f"{B}final_system  {RID}{N}   elapsed {el:.0f}min / {DUR:.0f}   {time.strftime('%H:%M:%S')}")
+bar = int(min(el / DUR, 1) * 46)
+print("  [" + "#" * bar + "." * (46 - bar) + "]")
+print(f"  探索止于 T-{DUR*0.45:.0f}min   只提交期 T-20min   {slug}")
+
+# ── HEALTH ─────────────────────────────────────────────────────────────
+# This panel exists because a run once died of 719 consecutive HTTP 401s while
+# every other panel read perfectly normal. Auth and crash counts come first.
+print(f"\n{B}-- 健康 --{N}")
+hs_out = readlines(os.path.join(C, "hearsay.stdout.log"))
+hs_err = readlines(os.path.join(C, "hearsay.stderr.log"))
+# "failed at the API" covers timeouts, watchdog interrupts and rate limits —
+# counting it as an auth failure reported 401s in every run while upstream
+# had rejected nothing at all (dryrun7: 2 "401"s, shim_upstream_error 0).
+auth_re = r"HTTP 401|error.{0,12}401|Failed to authenticate|invalid subscription key"
+n401 = len(re.findall(auth_re, hs_out))
+n_apifail = len(re.findall(r"failed at the API", hs_out))
+n_interrupt = len(re.findall(r"silent \d+s inside one turn", hs_out))
+ncrash = hs_err.count("Traceback")
+# Azure rejects web_search with a 400; Claude Code degrades gracefully and
+# carries on, so counting it as a fault made a healthy run look broken and
+# risked masking a real one (task 4: 4 benign 400s right after a genuine
+# DeploymentNotFound had just been fixed).
+_shim = [r for r in E if "shim_upstream_error" in r.get("event", "")]
+nshim_benign = sum(1 for r in _shim if "web_search" in str(r.get("detail", "")))
+nshim = len(_shim) - nshim_benign
+bad = n401 + ncrash + nshim  # 轮次中断不计入:那是保护机制
+col = R if bad else G
+mark = "⚠ 有异常" if bad else "✅ 正常"
+print(f"  {col}认证失败 {n401}   崩溃 {ncrash}   shim错误 {nshim}   {mark}{N}")
+if nshim_benign:
+    print(f"  {Y}(另有 {nshim_benign} 次 web_search 被 Azure 拒绝 — 已知无害,自动降级){N}")
+if n_apifail or n_interrupt:
+    print(f"  {Y}轮次中断 {n_apifail}(其中看门狗打断 {n_interrupt})— 长任务静默被打断属正常{N}")
+if n401:
+    for line in [l for l in hs_out.splitlines() if re.search(r"401|failed at the API", l)][-2:]:
+        print(f"    {R}{line.strip()[:104]}{N}")
+
+# ── LANES ──────────────────────────────────────────────────────────────
+print(f"\n{B}-- 路线 --{N}")
+now = time.time()
+for l in ("hearsay", "codex", "claude"):
+    d = os.path.join(S, "lanes", l)
+    if not os.path.isdir(d):
+        print(f"  {l:8} (未启动)"); continue
+    ob = os.path.join(d, "outbox")
+    n = len(os.listdir(ob)) if os.path.isdir(ob) else 0
+    rdy = len(glob.glob(os.path.join(ob, "*", "READY")))
+    k = len(glob.glob(os.path.join(d, "**", "kernel-metadata.json"), recursive=True))
+    fresh = 0
+    for root, _, files in os.walk(d):
+        for f in files:
+            try:
+                if now - os.path.getmtime(os.path.join(root, f)) < 300: fresh += 1
+            except OSError: pass
+        if fresh > 400: break
+    act = f"{G}活跃({fresh}){N}" if fresh else f"{Y}静默{N}"
+    print(f"  {l:8} outbox={n:<3} ready={rdy:<3} kernel包={k:<3} 近5分 {act}")
+
+# ── HEARSAY SOLVERS ────────────────────────────────────────────────────
+if hs_out:
+    print(f"\n{B}-- HearSay 三 solver + evaluator --{N}")
+    # Tool-call lines used to be filtered out so the panel would show prose,
+    # but a solver deep in execution emits nothing else for many minutes: the
+    # display froze on its opening sentence exactly while it was busiest, and
+    # read as a stalled agent. Keep the last line of any kind, and show how
+    # far back the last spoken line was so both signals stay visible.
+    latest, said, order = {}, {}, {}
+    for i, line in enumerate(hs_out.splitlines()):
+        m = re.match(r"\s*\[(solver_[abc]|evaluator)\]\s*(.*)", line)
+        if not m:
+            continue
+        who, body = m.group(1), m.group(2)
+        latest[who] = body
+        order[who] = i
+        if not body.startswith("->"):
+            said[who] = body
+    total = len(hs_out.splitlines())
+    for who in ("solver_a", "solver_b", "solver_c", "evaluator"):
+        if who not in latest:
+            continue
+        body = latest[who]
+        if body.startswith("->"):
+            tool = re.sub(r"^->\s*(\w+)\(.*", r"\1", body)[:14]
+            back = total - order[who]
+            note = said.get(who, "")[:58]
+            print(f"  {who:10} {G}[执行中 {tool}]{N} {note}")
+        else:
+            print(f"  {who:10} {body[:92]}")
+
+# ── SEARCH ─────────────────────────────────────────────────────────────
+print(f"\n{B}-- Search --{N}")
+b = glob.glob(os.path.join(S, "search", "*", "work", "analyst", "SEARCH_BUNDLE"))
+if not b:
+    fail = [r for r in E if r.get("event") == "search_finished"]
+    print(f"  {Y}(无 bundle){N}" + ("  search_finished 已发生" if fail else "  (进行中)"))
+else:
+    have = [f for f in ("TASK_ANALYSIS.md", "RESEARCH_SYNTHESIS.md", "SEARCH_OUTPUT.md")
+            if os.path.exists(os.path.join(b[0], f))]
+    raw = len(glob.glob(os.path.join(b[0], "research_raw", "*.md")))
+    print(f"  bundle: {len(have)}/3 文档  research_raw={raw} 路")
+
+# ── CANDIDATES ─────────────────────────────────────────────────────────
+print(f"\n{B}-- 候选(注册表) --{N}")
+idx = os.path.join(S, "shared", "registry", "index.json")
+if not os.path.exists(idx):
+    idx = next(iter(glob.glob(os.path.join(S, "**", "index.json"), recursive=True)), "")
+recs = list((jload(idx, {}) or {}).get("candidates", {}).values()) if idx else []
+if recs:
+    stt = {}
+    for r in recs:
+        stt[r.get("status", "?")] = stt.get(r.get("status", "?"), 0) + 1
+    print("  " + "  ".join(f"{k}={v}" for k, v in sorted(stt.items())))
+    scored = [r for r in recs if (r.get("evaluation") or {}).get("mean") is not None]
+    for r in sorted(scored, key=lambda x: -x["evaluation"]["mean"])[:5]:
+        print(f"    {r['evaluation']['mean']:.5f}  {str(r.get('candidate_id'))[:46]}")
+    if not scored:
+        print(f"    {Y}(尚无评分——公共尺子未冻结时候选无法排序){N}")
+else:
+    print("  (注册表为空)")
+
+# ── BROKER ─────────────────────────────────────────────────────────────
+print(f"\n{B}-- Broker(额度权威) --{N}")
+bs = jload(os.path.join(C, "BROKER_STATUS.json"), {}) or {}
+bstate = (jload(os.path.join(C, "broker_state.json"), {}) or {}).get("submissions", [])
+if bs:
+    print(f"  额度 {bs.get('consumed', '?')}/{bs.get('max_submissions', '?')} 已用   "
+          f"剩余 {bs.get('remaining', '?')}   final保留 {bs.get('final_reserve_remaining', '?')}"
+          f"/{bs.get('final_reserve', '?')}   在飞 {bs.get('inflight_or_ambiguous', '?')}")
+subs = [r for r in E if r["event"] == "broker_submission"]
+for r in subs[-5:]:
+    s = r.get("submission", {}) or {}
+    res = s.get("result", {}) or {}
+    mark = f"{G}✓{N}" if res.get("consumed") else f"{R}✗{N}"
+    print(f"  {mark} {str(s.get('candidate_id'))[:38]:40} local={s.get('local_score')} {str(res.get('detail'))[:34]}")
+print(f"  尝试 {len(subs)} 次，成功 {sum(1 for r in subs if ((r.get('submission') or {}).get('result') or {}).get('consumed'))}")
+
+# ── KAGGLE ─────────────────────────────────────────────────────────────
+print(f"\n{B}-- Kaggle(权威) --{N}")
+try:
+    if not slug:
+        raise RuntimeError("RUN_STATUS.json 无 slug")
+    out = subprocess.run(["kaggle", "competitions", "submissions", "-c", slug, "--csv"],
+                         capture_output=True, text=True, timeout=40, check=True
+                         ).stdout.strip().splitlines()
+    # Kaggle counts by competition, not by run: dryrun6/7's submissions stay
+    # in this list forever. Separate what THIS run did (broker ledger) from
+    # the account's history, or the panel reads as progress that never moved.
+    mine = bs.get("consumed", 0) if bs else 0
+    print(f"  本轮提交 {mine} 次   |   本比赛历史累计 {max(0, len(out)-1)} 次")
+    # Only rows this run actually produced. Scores and kernel states from
+    # earlier runs kept reading as current progress; the broker ledger knows
+    # exactly which submission ids belong to this run, so use that as the
+    # filter rather than showing whatever Kaggle lists first.
+    own_subs = {str(r.get("submission_id")) for r in (bstate or [])}
+    own_kernels = [str(r.get("kernel_ref")) for r in (bstate or [])
+                   if r.get("kernel_ref")]
+    shown = 0
+    for l in out[1:]:
+        f = l.split(",")
+        desc = f[3] if len(f) > 3 else ""
+        if not any(sid and sid in desc for sid in own_subs):
+            continue
+        print(f"    {(f[-2] or '评分中'):>9}  {desc[:52]}")
+        shown += 1
+        if shown >= 4:
+            break
+    if not shown:
+        print("    (本轮尚无提交)")
+    if own_kernels:
+        print(f"  本轮 kernel({len(own_kernels)} 个):")
+        for ref in own_kernels[-3:]:
+            stt = subprocess.run(["kaggle", "kernels", "status", ref],
+                                 capture_output=True, text=True, timeout=30).stdout
+            m = re.search(r'status "?([A-Za-z.]+)"?', stt)
+            s_ = m.group(1).replace("KernelWorkerStatus.", "") if m else "?"
+            c = G if s_ == "COMPLETE" else (R if s_ == "ERROR" else Y)
+            print(f"    {c}{s_:9}{N} {ref.split('/')[-1][:52]}")
+except Exception as e:
+    print(f"  {R}{str(e)[:70]}{N}")
+
+# ── SPEND ──────────────────────────────────────────────────────────────
+# Round-end total_cost_usd alone reads $0.00 for an entire live run: it only
+# lands when a round closes, and cached input never shows up in input_tokens.
+print(f"\n{B}-- 消耗 --{N}")
+for lane in ("claude", "codex"):
+    tot, itk, otk, cch = 0.0, 0, 0, 0
+    for f in glob.glob(os.path.join(C, "trajectories", lane, "*.jsonl")):
+        for l in open(f, errors="ignore"):
+            if not any(k in l for k in ("total_cost_usd", "usage", "total_token")): continue
+            try: d = json.loads(l)
+            except Exception: continue
+            c = d.get("total_cost_usd")
+            if isinstance(c, (int, float)): tot += c
+            u = (d.get("message") or {}).get("usage") or d.get("usage") or {}
+            if isinstance(u, dict):
+                itk += int(u.get("input_tokens") or 0)
+                otk += int(u.get("output_tokens") or 0)
+                cch += int(u.get("cache_read_input_tokens") or 0) + int(u.get("cache_creation_input_tokens") or 0)
+    lab = "Anthropic API" if lane == "claude" else "Azure /openai"
+    if lane == "codex" and not (tot or itk or otk):
+        # The codex CLI emits command_execution / item.* / file_change only,
+        # with no usage record anywhere, so the old "$0.00" was never a
+        # measurement — it was the absence of one, shown as a number.
+        print(f"  {lane:8} (codex CLI 不输出用量,无法统计)  ({lab})")
+    else:
+        print(f"  {lane:8} ${tot:7.2f} 已结算  in={itk:,} out={otk:,} cache={cch:,}  ({lab})")
+m = re.findall(r"cost=\$?([0-9.]+)", hs_out)
+if m:
+    print(f"  hearsay  ${float(m[-1]):7.2f}  (Anthropic API)")
+
+print(f"\n{B}-- 最近事件 --{N}")
+for r in E[-5:]:
+    print(f"  +{(r['timestamp']-t0)/60:5.1f}m  {r['event']}")
+PY
+  echo
+  echo "-- 进程 --  控制器=$(pgrep -u "$USER" -c -f 'final_system run' 2>/dev/null)  HearSay=$(pgrep -u "$USER" -c -f native.main 2>/dev/null)  claude=$(pgrep -u "$USER" -c -f '[_]bundled/claude' 2>/dev/null)  codex=$(pgrep -u "$USER" -c -f 'local/bin/codex' 2>/dev/null)  沙箱=$(pgrep -u "$USER" -c -f bwrap 2>/dev/null)"
+  echo "ctrl-c 退出 · 15s 刷新"
+  sleep 15
+done
